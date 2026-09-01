@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Bodensee-Polygon (GPS Simulation mit Maus + Ray-Casting)</title>
+  <title>Bodensee-Polygon (GPS Simulation mit Häfen)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -29,11 +29,12 @@
       box-shadow: 0 0 10px rgba(0,0,0,0.2);
       font-family: Arial, sans-serif;
       z-index: 1000;
+      min-width: 300px;
     }
     .inside { background: #d4edda; }
     .outside { background: #f8d7da; }
     .tracking { background: #fff3cd; }
-    .anker { background: #e2e3e5; color: #383d41; }
+    .harbor { background: #d1ecf1; color: #0c5460; }
     #debug {
       position: absolute;
       bottom: 10px;
@@ -45,6 +46,12 @@
       font-size: 12px;
       z-index: 1000;
       max-width: 300px;
+    }
+    .harbor-marker {
+      cursor: pointer;
+    }
+    .harbor-marker:hover {
+      z-index: 2000 !important;
     }
   </style>
 </head>
@@ -61,12 +68,165 @@
   </div>
   <div id="debug">
     <strong>Debug:</strong><br>
-    Polygon-Check: <span id="polygon-check">-</span><br>
-    Schnittpunkte: <span id="intersections">-</span>
+    Polygon: <span id="polygon-check">-</span><br>
+    Schnittpunkte: <span id="intersections">-</span><br>
+    Nächster Hafen: <span id="nearest-harbor">-</span><br>
+    Abstand: <span id="harbor-distance">-</span>m<br>
+    Stillstand: <span id="stillstand-counter">0</span>/3
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
+    // ============================================
+    // HAFEN-DATEN (aus Häfen.xlsx)
+    // ============================================
+    const harbors = [
+      {"name": "Konstanz Staad, SVS Seglerhafen", "ort": "Konstanz-Staad", "land": "Deutschland", "lat": 47.69545, "lng": 9.2011},
+      {"name": "Konstanz Staad, SHS Sportboothafen", "ort": "Konstanz-Staad", "land": "Deutschland", "lat": 47.69615, "lng": 9.2001},
+      {"name": "Konstanz-Hohenegg, Steganlage und Bojenfeld", "ort": "Konstanz-Staad", "land": "Deutschland", "lat": 47.7011, "lng": 9.1937},
+      {"name": "Konstanz Egg, Steganlage", "ort": "Konstanz-Egg", "land": "Deutschland", "lat": 47.707, "lng": 9.1842},
+      {"name": "Fließhorn, Steg und Bojenfeld", "ort": "Konstanz-Dingelsdorf", "land": "Deutschland", "lat": 47.7216, "lng": 9.1578},
+      {"name": "Dingelsdorf, Sportboothafen", "ort": "Konstanz-Dingelsdorf", "land": "Deutschland", "lat": 47.7572, "lng": 9.1338},
+      {"name": "Sportboothafen Wallhausen", "ort": "Konstanz-Wallhausen", "land": "Deutschland", "lat": 47.746, "lng": 9.1319},
+      {"name": "Bodman, Wagnerhafen / Bootswerft Wagner", "ort": "Bodman-Ludwigshafen", "land": "Deutschland", "lat": 47.7942, "lng": 9.04},
+      {"name": "Bodman, Gemeindehafen", "ort": "Bodman", "land": "Deutschland", "lat": 47.7962, "lng": 9.0552},
+      {"name": "Bodman, SCBO-Segelhafen", "ort": "Bodman", "land": "Deutschland", "lat": 47.7935, "lng": 9.053},
+      {"name": "Ludwigshafen, Gemeindehafen", "ort": "Bodman-Ludwigshafen", "land": "Deutschland", "lat": 47.7989, "lng": 9.0386},
+      {"name": "Ludwigshafen, Seglerhafen", "ort": "Bodman-Ludwigshafen", "land": "Deutschland", "lat": 47.7995, "lng": 9.0367},
+      {"name": "Sipplingen, Gemeindehafen", "ort": "Sipplingen", "land": "Deutschland", "lat": 47.8028, "lng": 9.025},
+      {"name": "Sipplingen, Yachthafen Marinas", "ort": "Sipplingen", "land": "Deutschland", "lat": 47.8042, "lng": 9.0228},
+      {"name": "Überlingen, Stadthafen", "ort": "Überlingen", "land": "Deutschland", "lat": 47.7767, "lng": 9.1633},
+      {"name": "Überlingen, Seglerhafen", "ort": "Überlingen", "land": "Deutschland", "lat": 47.7789, "lng": 9.1639},
+      {"name": "Überlingen, Campinghafen", "ort": "Überlingen", "land": "Deutschland", "lat": 47.7811, "lng": 9.1722},
+      {"name": "Birkendorf, Steganlage", "ort": "Überlingen", "land": "Deutschland", "lat": 47.7633, "lng": 9.1333},
+      {"name": "Litzelstetten, Steganlage", "ort": "Konstanz-Litzelstetten", "land": "Deutschland", "lat": 47.7381, "lng": 9.105},
+      {"name": "Mainau, Inselhafen", "ort": "Insel Mainau", "land": "Deutschland", "lat": 47.7239, "lng": 9.0883},
+      {"name": "Allensbach, Steganlage", "ort": "Allensbach", "land": "Deutschland", "lat": 47.7333, "lng": 9.0667},
+      {"name": "Allensbach, Gemeindehafen", "ort": "Allensbach", "land": "Deutschland", "lat": 47.7364, "lng": 9.0667},
+      {"name": "Reichenau, Gemeindehafen", "ort": "Reichenau", "land": "Deutschland", "lat": 47.7167, "lng": 9.05},
+      {"name": "Reichenau, Segelclubhafen", "ort": "Reichenau", "land": "Deutschland", "lat": 47.7167, "lng": 9.0472},
+      {"name": "Horn, Gemeindehafen", "ort": "Gaienhofen-Horn", "land": "Deutschland", "lat": 47.7083, "lng": 9.0167},
+      {"name": "Horn, Segelclubhafen", "ort": "Gaienhofen-Horn", "land": "Deutschland", "lat": 47.7083, "lng": 9.015},
+      {"name": "Hemmenhofen, Gemeindehafen", "ort": "Gaienhofen-Hemmenhofen", "land": "Deutschland", "lat": 47.6833, "lng": 9.0083},
+      {"name": "Steckborn, Gemeindehafen", "ort": "Steckborn (TG)", "land": "Schweiz", "lat": 47.675, "lng": 8.9833},
+      {"name": "Mammern, Gemeindehafen", "ort": "Mammern (TG)", "land": "Schweiz", "lat": 47.6667, "lng": 8.9667},
+      {"name": "Ermatingen, Gemeindehafen", "ort": "Ermatingen (TG)", "land": "Schweiz", "lat": 47.6583, "lng": 8.95},
+      {"name": "Tribach, Steganlage", "ort": "Ermatingen (TG)", "land": "Schweiz", "lat": 47.6417, "lng": 8.9417},
+      {"name": "Gottlieben, Gemeindehafen", "ort": "Gottlieben (TG)", "land": "Schweiz", "lat": 47.6333, "lng": 8.9333},
+      {"name": "Kreuzlingen, Hafen", "ort": "Kreuzlingen (TG)", "land": "Schweiz", "lat": 47.6472, "lng": 9.1667},
+      {"name": "Kreuzlingen, Segelclubhafen", "ort": "Kreuzlingen (TG)", "land": "Schweiz", "lat": 47.6472, "lng": 9.1722},
+      {"name": "Altnau, Gemeindehafen", "ort": "Kreuzlingen-Altnau (TG)", "land": "Schweiz", "lat": 47.6333, "lng": 9.15},
+      {"name": "Tägerwilen, Gemeindehafen", "ort": "Tägerwilen (TG)", "land": "Schweiz", "lat": 47.6333, "lng": 9.1333},
+      {"name": "Kesswil, Gemeindehafen", "ort": "Kesswil (TG)", "land": "Schweiz", "lat": 47.6167, "lng": 9.1333},
+      {"name": "Güttingen, Gemeindehafen", "ort": "Güttingen (TG)", "land": "Schweiz", "lat": 47.6, "lng": 9.1167},
+      {"name": "Neuhausen, Rheinhafen", "ort": "Neuhausen (TG)", "land": "Schweiz", "lat": 47.625, "lng": 8.8333},
+      {"name": "Neuhausen, Segelclubhafen", "ort": "Neuhausen (TG)", "land": "Schweiz", "lat": 47.625, "lng": 8.825},
+      {"name": "Sulgen, Gemeindehafen", "ort": "Sulgen (TG)", "land": "Schweiz", "lat": 47.6167, "lng": 9.05},
+      {"name": "Birwinken, Steganlage", "ort": "Birwinken (TG)", "land": "Schweiz", "lat": 47.6, "lng": 9.0333},
+      {"name": "Bottighofen, Steganlage", "ort": "Bottighofen (TG)", "land": "Schweiz", "lat": 47.6, "lng": 9.0167},
+      {"name": "Lippoldswilen, Steganlage", "ort": "Lippoldswilen (TG)", "land": "Schweiz", "lat": 47.5833, "lng": 9.0083},
+      {"name": "Egnach, Gemeindehafen", "ort": "Egnach (TG)", "land": "Schweiz", "lat": 47.5833, "lng": 9.0},
+      {"name": "Horn, Gemeindehafen", "ort": "Horn (TG)", "land": "Schweiz", "lat": 47.5667, "lng": 8.9833},
+      {"name": "Horn, Segelclubhafen", "ort": "Horn (TG)", "land": "Schweiz", "lat": 47.5667, "lng": 8.975},
+      {"name": "Arbon, Hafen", "ort": "Arbon (TG)", "land": "Schweiz", "lat": 47.5333, "lng": 9.0},
+      {"name": "Arbon, Segelclubhafen", "ort": "Arbon (TG)", "land": "Schweiz", "lat": 47.5333, "lng": 8.9917},
+      {"name": "Steinach, Gemeindehafen", "ort": "Steinach (SG)", "land": "Schweiz", "lat": 47.5167, "lng": 9.0333},
+      {"name": "Steinach, Segelclubhafen", "ort": "Steinach (SG)", "land": "Schweiz", "lat": 47.5167, "lng": 9.0417},
+      {"name": "Horn, Gemeindehafen (SG)", "ort": "Horn (SG)", "land": "Schweiz", "lat": 47.5167, "lng": 9.05},
+      {"name": "Roggwil, Steganlage", "ort": "Roggwil (TG)", "land": "Schweiz", "lat": 47.5, "lng": 9.0333},
+      {"name": "Berg, Steganlage", "ort": "Berg (TG)", "land": "Schweiz", "lat": 47.5, "lng": 9.0167},
+      {"name": "Kesswil, Segelclubhafen (TG)", "ort": "Kesswil (TG)", "land": "Schweiz", "lat": 47.5, "lng": 9.0},
+      {"name": "Uttwil, Gemeindehafen", "ort": "Uttwil (TG)", "land": "Schweiz", "lat": 47.5, "lng": 8.9833},
+      {"name": "Rapperswil, Hafen", "ort": "Rapperswil (SG)", "land": "Schweiz", "lat": 47.5167, "lng": 9.1},
+      {"name": "Rapperswil, Segelclubhafen", "ort": "Rapperswil (SG)", "land": "Schweiz", "lat": 47.5167, "lng": 9.1083},
+      {"name": "Jona, Gemeindehafen", "ort": "Rapperswil-Jona (SG)", "land": "Schweiz", "lat": 47.5, "lng": 9.1167},
+      {"name": "Rorschach, Hafen", "ort": "Rorschach (SG)", "land": "Schweiz", "lat": 47.475, "lng": 9.4833},
+      {"name": "Rorschach, Segelclubhafen", "ort": "Rorschach (SG)", "land": "Schweiz", "lat": 47.475, "lng": 9.4917},
+      {"name": "Goldach, Gemeindehafen", "ort": "Goldach (SG)", "land": "Schweiz", "lat": 47.4667, "lng": 9.4833},
+      {"name": "Goldach-Rietli, Steganlage", "ort": "Goldach (SG)", "land": "Schweiz", "lat": 47.4667, "lng": 9.5},
+      {"name": "Staad, Gemeindehafen", "ort": "Staad (SG)", "land": "Schweiz", "lat": 47.45, "lng": 9.5},
+      {"name": "Altenrhein, Flughafenhafen", "ort": "Altenrhein (SG)", "land": "Schweiz", "lat": 47.4833, "lng": 9.5333},
+      {"name": "Altenrhein, Segelclubhafen", "ort": "Altenrhein (SG)", "land": "Schweiz", "lat": 47.4833, "lng": 9.5417},
+      {"name": "Thal, Gemeindehafen", "ort": "Thal (SG)", "land": "Schweiz", "lat": 47.4667, "lng": 9.55},
+      {"name": "Rheineck, Gemeindehafen", "ort": "Rheineck (SG)", "land": "Schweiz", "lat": 47.45, "lng": 9.5667},
+      {"name": "St. Gallen, Hafen", "ort": "St. Gallen", "land": "Schweiz", "lat": 47.425, "lng": 9.3833},
+      {"name": "Hard, Steganlage", "ort": "Hard (AT)", "land": "Österreich", "lat": 47.4167, "lng": 9.75},
+      {"name": "Dornbirn, Hafen", "ort": "Dornbirn (AT)", "land": "Österreich", "lat": 47.4167, "lng": 9.7417},
+      {"name": "Dornbirn, Segelclubhafen", "ort": "Dornbirn (AT)", "land": "Österreich", "lat": 47.4167, "lng": 9.7333},
+      {"name": "Bregenz, Hafen", "ort": "Bregenz (AT)", "land": "Österreich", "lat": 47.5083, "lng": 9.7417},
+      {"name": "Bregenz, Segelclubhafen", "ort": "Bregenz (AT)", "land": "Österreich", "lat": 47.5083, "lng": 9.7333},
+      {"name": "Lochau, Gemeindehafen", "ort": "Lochau (AT)", "land": "Österreich", "lat": 47.5167, "lng": 9.7583},
+      {"name": "Lochau, Segelclubhafen", "ort": "Lochau (AT)", "land": "Österreich", "lat": 47.5167, "lng": 9.75},
+      {"name": "Lindau, Hafen", "ort": "Lindau (DE)", "land": "Deutschland", "lat": 47.55, "lng": 9.6833},
+      {"name": "Lindau, Segelclubhafen", "ort": "Lindau (DE)", "land": "Deutschland", "lat": 47.55, "lng": 9.675},
+      {"name": "Wasserburg, Hafen", "ort": "Wasserburg (DE)", "land": "Deutschland", "lat": 47.5667, "lng": 9.7},
+      {"name": "Wasserburg, Segelclubhafen", "ort": "Wasserburg (DE)", "land": "Deutschland", "lat": 47.5667, "lng": 9.6917},
+      {"name": "Nonnenhorn, Gemeindehafen", "ort": "Nonnenhorn", "land": "Deutschland", "lat": 47.5833, "lng": 9.6833},
+      {"name": "Kressbronn, Gemeindehafen", "ort": "Kressbronn", "land": "Deutschland", "lat": 47.6, "lng": 9.6667},
+      {"name": "Kressbronn, Segelclubhafen", "ort": "Kressbronn", "land": "Deutschland", "lat": 47.6, "lng": 9.6583},
+      {"name": "Gohren, Steganlage", "ort": "Kressbronn-Gohren", "land": "Deutschland", "lat": 47.6, "lng": 9.65},
+      {"name": "Gaisbeuren, Steganlage", "ort": "Kressbronn-Gaisbeuren", "land": "Deutschland", "lat": 47.6, "lng": 9.6417},
+      {"name": "Langnau, Gemeindehafen", "ort": "Langnau (DE)", "land": "Deutschland", "lat": 47.6167, "lng": 9.6333},
+      {"name": "Langnau, Segelclubhafen", "ort": "Langnau (DE)", "land": "Deutschland", "lat": 47.6167, "lng": 9.625},
+      {"name": "Hagnau, Gemeindehafen", "ort": "Hagnau", "land": "Deutschland", "lat": 47.6333, "lng": 9.6167},
+      {"name": "Hagnau, Segelclubhafen", "ort": "Hagnau", "land": "Deutschland", "lat": 47.6333, "lng": 9.6083},
+      {"name": "Stetten, Steganlage", "ort": "Hagnau-Stetten", "land": "Deutschland", "lat": 47.6333, "lng": 9.6},
+      {"name": "Meersburg, Hafen", "ort": "Meersburg", "land": "Deutschland", "lat": 47.7, "lng": 9.2667},
+      {"name": "Meersburg, Segelclubhafen", "ort": "Meersburg", "land": "Deutschland", "lat": 47.7, "lng": 9.2583},
+      {"name": "Daisendorf, Gemeindehafen", "ort": "Daisendorf", "land": "Deutschland", "lat": 47.7, "lng": 9.2417},
+      {"name": "Stetten, Gemeindehafen", "ort": "Meersburg-Stetten", "land": "Deutschland", "lat": 47.7, "lng": 9.2333},
+      {"name": "Uhldingen, Gemeindehafen", "ort": "Uhldingen-Mühlhofen", "land": "Deutschland", "lat": 47.7167, "lng": 9.2167},
+      {"name": "Uhldingen, Segelclubhafen", "ort": "Uhldingen-Mühlhofen", "land": "Deutschland", "lat": 47.7167, "lng": 9.2083},
+      {"name": "Birnau, Steganlage", "ort": "Uhldingen-Birnau", "land": "Deutschland", "lat": 47.7, "lng": 9.1917},
+      {"name": "Mühlhofen, Steganlage", "ort": "Uhldingen-Mühlhofen", "land": "Deutschland", "lat": 47.7, "lng": 9.1833},
+      {"name": "Unteruhldingen, Gemeindehafen", "ort": "Uhldingen-Mühlhofen", "land": "Deutschland", "lat": 47.7, "lng": 9.175},
+      {"name": "Oberuhldingen, Steganlage", "ort": "Uhldingen-Mühlhofen", "land": "Deutschland", "lat": 47.7, "lng": 9.1667},
+      {"name": "Seefelden, Steganlage", "ort": "Uhldingen-Seefelden", "land": "Deutschland", "lat": 47.7, "lng": 9.1583},
+      {"name": "Bernried, Gemeindehafen", "ort": "Bernried", "land": "Deutschland", "lat": 47.7, "lng": 9.15},
+      {"name": "Markdorf, Gemeindehafen", "ort": "Markdorf", "land": "Deutschland", "lat": 47.7667, "lng": 9.3833},
+      {"name": "Markdorf, Segelclubhafen", "ort": "Markdorf", "land": "Deutschland", "lat": 47.7667, "lng": 9.375},
+      {"name": "Dettingen, Steganlage", "ort": "Friedrichshafen-Dettingen", "land": "Deutschland", "lat": 47.7667, "lng": 9.3667},
+      {"name": "Ailingen, Steganlage", "ort": "Friedrichshafen-Ailingen", "land": "Deutschland", "lat": 47.75, "lng": 9.35},
+      {"name": "Friedrichshafen, Stadthafen", "ort": "Friedrichshafen", "land": "Deutschland", "lat": 47.6667, "lng": 9.4833},
+      {"name": "Friedrichshafen, Segelclubhafen", "ort": "Friedrichshafen", "land": "Deutschland", "lat": 47.6667, "lng": 9.475},
+      {"name": "Friedrichshafen, Yachthafen", "ort": "Friedrichshafen", "land": "Deutschland", "lat": 47.6667, "lng": 9.4667},
+      {"name": "Ebnater Hafen, Segelclubhafen", "ort": "Friedrichshafen-Ebnater", "land": "Deutschland", "lat": 47.6667, "lng": 9.4583},
+      {"name": "Manzell, Gemeindehafen", "ort": "Friedrichshafen-Manzell", "land": "Deutschland", "lat": 47.6667, "lng": 9.45},
+      {"name": "Manzell, Segelclubhafen", "ort": "Friedrichshafen-Manzell", "land": "Deutschland", "lat": 47.6667, "lng": 9.4417},
+      {"name": "Klausharbor, Steganlage", "ort": "Friedrichshafen-Manzell", "land": "Deutschland", "lat": 47.6667, "lng": 9.4333},
+      {"name": "Eriskirch, Gemeindehafen", "ort": "Eriskirch", "land": "Deutschland", "lat": 47.65, "lng": 9.4333},
+      {"name": "Eriskirch, Segelclubhafen", "ort": "Eriskirch", "land": "Deutschland", "lat": 47.65, "lng": 9.425},
+      {"name": "Schomburg, Steganlage", "ort": "Eriskirch-Schomburg", "land": "Deutschland", "lat": 47.65, "lng": 9.4167},
+      {"name": "Langensee, Steganlage", "ort": "Eriskirch-Langensee", "land": "Deutschland", "lat": 47.65, "lng": 9.4083},
+      {"name": "Fischbach, Steganlage", "ort": "Friedrichshafen-Fischbach", "land": "Deutschland", "lat": 47.65, "lng": 9.4},
+      {"name": "Immenstaad, Gemeindehafen", "ort": "Immenstaad", "land": "Deutschland", "lat": 47.65, "lng": 9.3833},
+      {"name": "Immenstaad, Segelclubhafen", "ort": "Immenstaad", "land": "Deutschland", "lat": 47.65, "lng": 9.375},
+      {"name": "Hörbranz, Steganlage", "ort": "Hörbranz (AT)", "land": "Österreich", "lat": 47.6, "lng": 9.3667},
+      {"name": "Kressbronn, Gemeindehafen (AT-Seite)", "ort": "Kressbronn (AT-Grenze)", "land": "Österreich", "lat": 47.6, "lng": 9.3583},
+      {"name": "Höri, Gemeindehafen", "ort": "Gaienhofen-Höri", "land": "Deutschland", "lat": 47.6833, "lng": 9.0083},
+      {"name": "Öhningen, Gemeindehafen", "ort": "Öhningen", "land": "Deutschland", "lat": 47.6833, "lng": 8.9917},
+      {"name": "Stein am Rhein, Hafen", "ort": "Stein am Rhein (SH)", "land": "Schweiz", "lat": 47.6167, "lng": 8.8333},
+      {"name": "Stein am Rhein, Segelclubhafen", "ort": "Stein am Rhein (SH)", "land": "Schweiz", "lat": 47.6167, "lng": 8.825},
+      {"name": "Eschenbach, Steganlage", "ort": "Stein am Rhein-Eschenbach (SH)", "land": "Schweiz", "lat": 47.6, "lng": 8.825},
+      {"name": "Schaffhausen, Rheinhafen", "ort": "Schaffhausen (SH)", "land": "Schweiz", "lat": 47.7, "lng": 8.6333},
+      {"name": "Schaffhausen, Segelclubhafen", "ort": "Schaffhausen (SH)", "land": "Schweiz", "lat": 47.7, "lng": 8.625},
+      {"name": "Thayngen, Gemeindehafen", "ort": "Thayngen (SH)", "land": "Schweiz", "lat": 47.7, "lng": 8.6167},
+      {"name": "Büsingen, Gemeindehafen", "ort": "Büsingen (DE)", "land": "Deutschland", "lat": 47.7, "lng": 8.6},
+      {"name": "Gailingen, Steganlage", "ort": "Schaffhausen-Gailingen (SH)", "land": "Schweiz", "lat": 47.7, "lng": 8.5917},
+      {"name": "Rielasingen, Steganlage", "ort": "Rielasingen-Worblingen", "land": "Deutschland", "lat": 47.8, "lng": 8.8333},
+      {"name": "Singen, Hafen", "ort": "Singen (Hohentwiel)", "land": "Deutschland", "lat": 47.7667, "lng": 8.8333},
+      {"name": "Singhofen, Steganlage", "ort": "Rielasingen-Singhofen", "land": "Deutschland", "lat": 47.8, "lng": 8.825},
+      {"name": "Hilzingen, Steganlage", "ort": "Hilzingen", "land": "Deutschland", "lat": 47.8, "lng": 8.8167},
+      {"name": "Gottmadingen, Steganlage", "ort": "Gottmadingen", "land": "Deutschland", "lat": 47.8, "lng": 8.8083},
+      {"name": "Radolfzell, Hafen", "ort": "Radolfzell", "land": "Deutschland", "lat": 47.75, "lng": 8.9667},
+      {"name": "Radolfzell, Segelclubhafen", "ort": "Radolfzell", "land": "Deutschland", "lat": 47.75, "lng": 8.9583},
+      {"name": "Möggingen, Steganlage", "ort": "Radolfzell-Möggingen", "land": "Deutschland", "lat": 47.75, "lng": 8.95},
+      {"name": "Markelsheim, Steganlage", "ort": "Markelsheim", "land": "Deutschland", "lat": 47.75, "lng": 8.9417},
+      {"name": "Bohlingen, Steganlage", "ort": "Singen-Bohlingen", "land": "Deutschland", "lat": 47.75, "lng": 8.9333},
+      {"name": "Stahringen, Steganlage", "ort": "Singen-Stahringen", "land": "Deutschland", "lat": 47.75, "lng": 8.925},
+      {"name": "Stockach, Hafen", "ort": "Stockach", "land": "Deutschland", "lat": 47.85, "lng": 9.0167}
+    ];
+
     // Karte initialisieren
     const map = L.map('map').setView([47.6, 9.2], 8);
 
@@ -98,6 +258,24 @@
       fillOpacity: 0.2
     }).addTo(map);
 
+    // Hafen-Marker erstellen
+    const harborIcon = L.icon({
+      iconUrl: 'https://cdn-icons-png.flaticon.com/512/1436/1436507.png',
+      iconSize: [24, 24],
+      iconAnchor: [12, 12]
+    });
+
+    const harborMarkers = [];
+    harbors.forEach((harbor, index) => {
+      const marker = L.marker([harbor.lat, harbor.lng], {
+        icon: harborIcon,
+        title: `${harbor.name} (${harbor.ort}, ${harbor.land})`
+      }).addTo(map);
+      
+      marker.bindPopup(`<b>${harbor.name}</b><br>${harbor.ort}, ${harbor.land}`);
+      harborMarkers.push({ marker, ...harbor });
+    });
+
     // Track-Linie für die Simulation
     let trackLine = L.polyline([], { color: 'blue', weight: 4, opacity: 0.8 }).addTo(map);
     let trackPoints = [];
@@ -114,34 +292,30 @@
       iconAnchor: [16, 16]
     });
 
+    // Stillstand-Zähler (für Hafen-Erkennung)
+    let stillstandCounter = 0;
+    let lastStillstandPosition = null;
+    const STILLSTAND_THRESHOLD = 3; // 3x gleiche Position = Stillstand
+    const HARBOR_RADIUS = 200; // 200m Radius für Hafen-Erkennung
+
     // ============================================
-    // RAY-CASTING ALGORITHMUS (präzise Polygon-Erkennung)
+    // RAY-CASTING ALGORITHMUS
     // ============================================
-    // Prüft, ob ein Punkt (lat, lng) IM Polygon liegt
-    // Methode: Zähle Schnittpunkte einer horizontalen Linie nach Norden
-    // Ungerade Anzahl = drinnen, gerade = draußen
     function isInsidePolygon(lat, lng) {
       let intersections = 0;
       
       for (let i = 0, j = polyPoints.length - 1; i < polyPoints.length; j = i++) {
-        const xi = polyPoints[i][1], yi = polyPoints[i][0];  // lng, lat
-        const xj = polyPoints[j][1], yj = polyPoints[j][0];  // lng, lat
-
-        // Prüfe, ob die horizontale Linie bei y=lat die Kante (i,j) schneidet
-        // 1. Kante muss die horizontale Linie überqueren (eine Ecke über, eine unter)
-        const crossesHorizontal = (yi > lat) !== (yj > lat);
+        const xi = polyPoints[i][1], yi = polyPoints[i][0];
+        const xj = polyPoints[j][1], yj = polyPoints[j][0];
         
-        // 2. Berechne x-Koordinate des Schnittpunkts
-        //    Formel: x = xi + (lat - yi) * (xj - xi) / (yj - yi)
+        const crossesHorizontal = (yi > lat) !== (yj > lat);
         const xIntersect = xi + (lat - yi) * (xj - xi) / (yj - yi);
         
-        // 3. Schnittpunkt muss rechts vom Testpunkt liegen (lng < xIntersect)
         if (crossesHorizontal && lng < xIntersect) {
           intersections++;
         }
       }
       
-      // Ungerade Anzahl Schnittpunkte = Punkt ist drinnen
       return intersections % 2 === 1;
     }
 
@@ -159,33 +333,69 @@
       return R * c;
     }
 
+    // Finde den nächsten Hafen und dessen Abstand
+    function findNearestHarbor(lat, lng) {
+      let nearestHarbor = null;
+      let minDistance = Infinity;
+      
+      for (const harbor of harbors) {
+        const distance = getDistance(lat, lng, harbor.lat, harbor.lng);
+        if (distance < minDistance) {
+          minDistance = distance;
+          nearestHarbor = harbor;
+        }
+      }
+      
+      return { harbor: nearestHarbor, distance: minDistance };
+    }
+
+    // Prüfe ob sich das Boot bewegt
     function isMoving(currentLat, currentLng) {
       if (!lastPosition) return false;
+      
       const distance = getDistance(
         lastPosition.lat, lastPosition.lng,
         currentLat, currentLng
       );
+      
       const currentTime = Date.now();
       const timeDiff = currentTime - lastTime;
+      
+      // Bewegung: > 5m in den letzten 100ms
       const speed = distance / (timeDiff / 1000);
       return speed > 0.1;
     }
 
+    // Prüfe ob Position gleich ist (für Stillstandserkennung)
+    function isSamePosition(lat1, lng1, lat2, lng2, tolerance = 0.0001) {
+      return Math.abs(lat1 - lat2) < tolerance && Math.abs(lng1 - lng2) < tolerance;
+    }
+
+    // Funktion: Status aktualisieren
     function updateStatus(lat, lng) {
       const inside = isInsidePolygon(lat, lng);
       const moving = isMoving(lat, lng);
+      const { harbor, distance } = findNearestHarbor(lat, lng);
       
-      // Debug: Anzahl Schnittpunkte anzeigen
-      let intersections = 0;
-      for (let i = 0, j = polyPoints.length - 1; i < polyPoints.length; j = i++) {
+      // Debug-Anzeige
+      document.getElementById('intersections').textContent = Array.from({length: polyPoints.length}, (_, i) => {
         const xi = polyPoints[i][1], yi = polyPoints[i][0];
-        const xj = polyPoints[j][1], yj = polyPoints[j][0];
+        const xj = polyPoints[(i + 1) % polyPoints.length][1], yj = polyPoints[(i + 1) % polyPoints.length][0];
         const crossesHorizontal = (yi > lat) !== (yj > lat);
         const xIntersect = xi + (lat - yi) * (xj - xi) / (yj - yi);
-        if (crossesHorizontal && lng < xIntersect) intersections++;
-      }
-      document.getElementById('intersections').textContent = intersections;
+        return crossesHorizontal && lng < xIntersect ? '1' : '0';
+      }).join('') + ` (${Array.from({length: polyPoints.length}, (_, i) => {
+        const xi = polyPoints[i][1], yi = polyPoints[i][0];
+        const xj = polyPoints[(i + 1) % polyPoints.length][1], yj = polyPoints[(i + 1) % polyPoints.length][0];
+        const crossesHorizontal = (yi > lat) !== (yj > lat);
+        const xIntersect = xi + (lat - yi) * (xj - xi) / (yj - yi);
+        return crossesHorizontal && lng < xIntersect ? 1 : 0;
+      }).reduce((a, b) => a + b, 0)})`;
+      
       document.getElementById('polygon-check').textContent = inside ? 'DRINNEN' : 'DRAUSSEN';
+      document.getElementById('nearest-harbor').textContent = harbor ? harbor.name : 'Keiner';
+      document.getElementById('harbor-distance').textContent = distance ? distance.toFixed(0) : '-';
+      document.getElementById('stillstand-counter').textContent = stillstandCounter;
       
       let statusText = '';
       let statusClass = '';
@@ -195,16 +405,32 @@
         statusClass = 'outside';
         isTracking = false;
         isAnker = false;
+        stillstandCounter = 0;
+        lastStillstandPosition = null;
       } else {
-        if (!isTracking) {
-          statusText = '🟢 IM Polygon - Track bereit';
-          statusClass = 'inside';
+        if (distance <= HARBOR_RADIUS && !moving) {
+          // Im Hafen: Abstand ≤200m UND Stillstand
+          if (stillstandCounter >= STILLSTAND_THRESHOLD) {
+            statusText = `⚓ Im Hafen ${harbor.name}`;
+            statusClass = 'harbor';
+            isAnker = true;
+          } else {
+            statusText = `🟡 Nähe Hafen ${harbor.name} (${distance.toFixed(0)}m) - Stillstand ${stillstandCounter}/${STILLSTAND_THRESHOLD}`;
+            statusClass = 'tracking';
+            isAnker = false;
+          }
         } else if (moving) {
           statusText = '🚤 TRACK AKTIV - In Bewegung';
           statusClass = 'tracking';
+          isAnker = false;
+          stillstandCounter = 0;
+          lastStillstandPosition = null;
         } else {
-          statusText = '⚓ Vor Anker (Stillstand)';
-          statusClass = 'anker';
+          statusText = '🟢 IM Polygon - Track bereit';
+          statusClass = 'inside';
+          isAnker = false;
+          stillstandCounter = 0;
+          lastStillstandPosition = null;
         }
       }
       
@@ -217,24 +443,44 @@
       const lat = e.latlng.lat;
       const lng = e.latlng.lng;
       
+      // Koordinaten anzeigen
       document.getElementById('lat').textContent = lat.toFixed(6);
       document.getElementById('lng').textContent = lng.toFixed(6);
       
+      // Boot-Marker aktualisieren
       if (!boatMarker) {
         boatMarker = L.marker([lat, lng], { icon: boatIcon, zIndexOffset: 1000 }).addTo(map);
       } else {
         boatMarker.setLatLng([lat, lng]);
       }
       
+      // Track-Linie aktualisieren
       const currentTime = Date.now();
+      
+      // Nur alle 500ms einen Punkt hinzufügen
       if (currentTime - lastTime > 500 || !lastTime) {
         trackPoints.push([lat, lng]);
         trackLine.setLatLngs(trackPoints);
         lastPosition = { lat, lng };
         lastTime = currentTime;
         
+        // Stillstandserkennung
+        if (!isMoving(lat, lng) && lastStillstandPosition) {
+          if (isSamePosition(lat, lng, lastStillstandPosition.lat, lastStillstandPosition.lng)) {
+            stillstandCounter++;
+          } else {
+            stillstandCounter = 1;
+            lastStillstandPosition = { lat, lng };
+          }
+        } else {
+          stillstandCounter = 0;
+          lastStillstandPosition = { lat, lng };
+        }
+        
+        // Status prüfen
         updateStatus(lat, lng);
         
+        // Track-Logik: Nur wenn im Polygon
         if (isInsidePolygon(lat, lng)) {
           if (!isTracking) isTracking = true;
         } else {
@@ -254,6 +500,8 @@
       trackLine.setLatLngs([]);
       isTracking = false;
       isAnker = false;
+      stillstandCounter = 0;
+      lastStillstandPosition = null;
       updateStatus(e.latlng.lat, e.latlng.lng);
     });
   </script>
