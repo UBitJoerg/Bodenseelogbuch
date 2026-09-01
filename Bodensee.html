@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Bodensee-Polygon (GPS Simulation mit FIFO + korrigierten Häfen)</title>
+  <title>Bodensee-Polygon (GPS mit FIFO + echtem GPS)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -47,18 +47,52 @@
       z-index: 1000;
       max-width: 350px;
     }
-    .harbor-marker {
+    #gps-info {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: white;
+      padding: 8px;
+      border-radius: 5px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.2);
+      font-family: Arial, sans-serif;
+      font-size: 12px;
+      z-index: 1000;
+    }
+    #permission-banner {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: white;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 0 20px rgba(0,0,0,0.5);
+      z-index: 2000;
+      text-align: center;
+    }
+    #permission-banner button {
+      margin-top: 10px;
+      padding: 8px 16px;
+      background: #007bff;
+      color: white;
+      border: none;
+      border-radius: 4px;
       cursor: pointer;
     }
   </style>
 </head>
 <body>
   <div id="map"></div>
+  <div id="gps-info">
+    <strong>GPS Quelle:</strong> <span id="gps-source">Erkennung läuft...</span><br>
+    <small id="os-info"></small>
+  </div>
   <div id="info">
-    <strong>GPS Simulation</strong><br>
+    <strong>Position</strong><br>
     Lat: <span id="lat">-</span><br>
     Lng: <span id="lng">-</span><br>
-    <small>Bewege die Maus über die Karte</small>
+    <small>Bewege Maus oder aktiviere GPS</small>
   </div>
   <div id="status">
     <strong>Status:</strong> <span id="status-text">Warte auf Position...</span>
@@ -79,16 +113,137 @@
     // ============================================
     const CONFIG = {
       FIFO_SIZE: 3,           // Anzahl Punkte im FIFO für Stillstandserkennung
-      HARBOR_RADIUS: 200,     // 200m Radius für Hafen-Erkennung
-      STILLSTAND_THRESHOLD: 3, // 3x gleiche Position = Stillstand
+      HARBOR_RADIUS_DISPLAY: 500,  // 500m Radius für Hafen-Anzeige
+      HARBOR_RADIUS_DETECT: 100,   // 100m Radius für Hafen-Erkennung (Stillstand)
       TRACK_INTERVAL: 500,    // 500ms zwischen Track-Punkten
-      MOVEMENT_THRESHOLD: 0.1 // 0.1 m/s = ~0.36 km/h (sehr langsame Bewegung)
+      MOVEMENT_THRESHOLD: 0.1 // 0.1 m/s = ~0.36 km/h
     };
+
+    // ============================================
+    // BETRIEBSSYSTEM-ERKENNUNG
+    // ============================================
+    function detectOS() {
+      const userAgent = window.navigator.userAgent || window.navigator.vendor || window.opera;
+      
+      if (/windows/i.test(userAgent)) {
+        return 'Windows';
+      } else if (/android/i.test(userAgent)) {
+        return 'Android';
+      } else if (/iPad|iPhone|iPod/i.test(userAgent)) {
+        return 'iOS';
+      } else if (/Mac/i.test(userAgent)) {
+        return 'Mac';
+      } else if (/Linux/i.test(userAgent)) {
+        return 'Linux';
+      }
+      return 'Unknown';
+    }
+
+    const OS = detectOS();
+    const IS_MOBILE = /Android|iOS/i.test(OS);
+    const USES_REAL_GPS = IS_MOBILE;
+
+    // ============================================
+    // GPS-QUELLE
+    // ============================================
+    let currentPosition = null;
+    let watchId = null;
+    let gpsActive = false;
+
+    function initGPS() {
+      document.getElementById('os-info').textContent = `Betriebssystem: ${OS}`;
+      
+      if (!USES_REAL_GPS) {
+        // Maus-Simulation für Desktop
+        document.getElementById('gps-source').textContent = 'Maus (Desktop)';
+        return;
+      }
+
+      // Echte GPS für Mobile
+      document.getElementById('gps-source').textContent = 'GPS (Mobile)';
+
+      if (navigator.geolocation) {
+        // Hohe Genauigkeit anfordern
+        const options = {
+          enableHighAccuracy: true,
+          timeout: 5000,
+          maximumAge: 0
+        };
+
+        // Einmalige Position abfragen
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            currentPosition = {
+              lat: position.coords.latitude,
+              lng: position.coords.longitude
+            };
+            gpsActive = true;
+            document.getElementById('gps-source').textContent = 'GPS (Mobile) - Aktiv';
+            updatePosition(position.coords.latitude, position.coords.longitude);
+          },
+          (error) => {
+            console.error('GPS-Fehler:', error);
+            document.getElementById('gps-source').textContent = 'GPS - Berechtigung verweigert';
+            showPermissionBanner();
+          },
+          options
+        );
+
+        // Kontinuierliche Updates
+        watchId = navigator.geolocation.watchPosition(
+          (position) => {
+            currentPosition = {
+              lat: position.coords.latitude,
+              lng: position.coords.longitude
+            };
+            gpsActive = true;
+            updatePosition(position.coords.latitude, position.coords.longitude);
+          },
+          (error) => {
+            console.error('GPS-Watch-Fehler:', error);
+          },
+          options
+        );
+      } else {
+        document.getElementById('gps-source').textContent = 'GPS nicht verfügbar';
+      }
+    }
+
+    function showPermissionBanner() {
+      const banner = document.createElement('div');
+      banner.id = 'permission-banner';
+      banner.innerHTML = `
+        <h3>GPS-Berechtigung erforderlich</h3>
+        <p>Bitte erlaube den Zugriff auf deine Position, um die GPS-Simulation zu nutzen.</p>
+        <button onclick="requestGPSPermission()">Berechtigung erteilen</button>
+      `;
+      document.body.appendChild(banner);
+    }
+
+    function requestGPSPermission() {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            const banner = document.getElementById('permission-banner');
+            if (banner) banner.remove();
+            currentPosition = {
+              lat: position.coords.latitude,
+              lng: position.coords.longitude
+            };
+            gpsActive = true;
+            document.getElementById('gps-source').textContent = 'GPS (Mobile) - Aktiv';
+            updatePosition(position.coords.latitude, position.coords.longitude);
+          },
+          (error) => {
+            console.error('GPS-Fehler:', error);
+          }
+        );
+      }
+    }
 
     // ============================================
     // HAFEN-DATEN (korrigierte Koordinaten)
     // ============================================
-    // Basis-Koordinaten aus deiner Zusammenfassung + OpenStreetMap-Abgleich
     const harbors = [
       // Deutschland - Nordufer
       {name: "Konstanz Stadtwerke", ort: "Konstanz", land: "Deutschland", lat: 47.6627, lng: 9.1802},
@@ -209,7 +364,7 @@
     // TRACK-LINIE UND MARKER
     // ============================================
     let trackLine = L.polyline([], { color: 'blue', weight: 4, opacity: 0.8 }).addTo(map);
-    let trackPoints = [];  // Alle Punkte für die Track-Linie
+    let trackPoints = [];
     let boatMarker = null;
     
     // FIFO für Stillstandserkennung
@@ -277,17 +432,66 @@
       return { harbor: nearestHarbor, distance: minDistance };
     }
 
-    // Prüfe ob sich das Boot bewegt
-    function isMoving(currentLat, currentLng, lastLat, lastLng, timeDiff) {
-      const distance = getDistance(lastLat, lastLng, currentLat, currentLng);
-      const speed = distance / (timeDiff / 1000); // m/s
-      return speed > CONFIG.MOVEMENT_THRESHOLD;
-    }
-
     // Prüfe ob Position gleich ist (für FIFO)
     function isSamePosition(pos1, pos2, tolerance = 0.00001) {
       return Math.abs(pos1.lat - pos2.lat) < tolerance && 
              Math.abs(pos1.lng - pos2.lng) < tolerance;
+    }
+
+    // ============================================
+    // POSITION AKTUALISIEREN (von Maus oder GPS)
+    // ============================================
+    function updatePosition(lat, lng) {
+      const currentTime = Date.now();
+      
+      // Koordinaten anzeigen
+      document.getElementById('lat').textContent = lat.toFixed(6);
+      document.getElementById('lng').textContent = lng.toFixed(6);
+      
+      // Boot-Marker aktualisieren
+      if (!boatMarker) {
+        boatMarker = L.marker([lat, lng], { icon: boatIcon, zIndexOffset: 1000 }).addTo(map);
+      } else {
+        boatMarker.setLatLng([lat, lng]);
+      }
+      
+      // Immer Position im FIFO speichern (für Stillstandserkennung)
+      const currentPos = { lat, lng, time: currentTime };
+      
+      // FIFO aktualisieren (maximal CONFIG.FIFO_SIZE Punkte)
+      if (positionFIFO.length >= CONFIG.FIFO_SIZE) {
+        positionFIFO.shift();
+      }
+      positionFIFO.push(currentPos);
+      
+      // Nur alle CONFIG.TRACK_INTERVAL ms einen Punkt zur Track-Linie hinzufügen
+      if (currentTime - lastTime > CONFIG.TRACK_INTERVAL || !lastTime) {
+        // Prüfe ob Stillstand (alle Positionen im FIFO gleich)
+        const allSame = positionFIFO.length >= CONFIG.FIFO_SIZE &&
+                        positionFIFO.every(p => isSamePosition(p, positionFIFO[0]));
+        
+        // Track-Punkt nur hinzufügen, wenn NICHT Stillstand
+        if (!allSame) {
+          trackPoints.push([lat, lng]);
+          trackLine.setLatLngs(trackPoints);
+        }
+        
+        lastPosition = { lat, lng };
+        lastTime = currentTime;
+        
+        // Status prüfen
+        updateStatus(lat, lng);
+        
+        // Track-Logik: Nur wenn im Polygon
+        if (isInsidePolygon(lat, lng)) {
+          if (!isTracking) isTracking = true;
+        } else {
+          isTracking = false;
+          trackPoints = [];
+          trackLine.setLatLngs([]);
+          positionFIFO = [];
+        }
+      }
     }
 
     // ============================================
@@ -316,29 +520,22 @@
         isAnker = false;
         positionFIFO = [];
       } else {
-        // Prüfe ob alle Positionen im FIFO gleich sind
         const allSame = positionFIFO.length >= CONFIG.FIFO_SIZE &&
-                        positionFIFO.every(p => 
-                          isSamePosition(p, positionFIFO[0])
-                        );
+                        positionFIFO.every(p => isSamePosition(p, positionFIFO[0]));
         
-        if (distance <= CONFIG.HARBOR_RADIUS && allSame) {
-          // Im Hafen: Abstand ≤200m UND FIFO voll mit gleicher Position
+        if (distance <= CONFIG.HARBOR_RADIUS_DETECT && allSame) {
           statusText = `⚓ Im Hafen ${harbor.name}`;
           statusClass = 'harbor';
           isAnker = true;
-        } else if (distance <= CONFIG.HARBOR_RADIUS) {
-          // In Hafen-Nähe
-          statusText = `🟡 Nähe Hafen ${harbor.name} (${distance.toFixed(0)}m) - FIFO: ${positionFIFO.length}/${CONFIG.FIFO_SIZE}`;
+        } else if (distance <= CONFIG.HARBOR_RADIUS_DISPLAY) {
+          statusText = `🟡 Nähe Hafen ${harbor.name} (${distance.toFixed(0)}m)`;
           statusClass = 'tracking';
           isAnker = false;
-        } else if (positionFIFO.length >= CONFIG.FIFO_SIZE && allSame) {
-          // Stillstand im Polygon (nicht in Hafen-Nähe)
-          statusText = `🟢 IM Polygon - Stillstand (FIFO: ${positionFIFO.length}/${CONFIG.FIFO_SIZE})`;
+        } else if (allSame) {
+          statusText = `🟢 IM Polygon - Stillstand (${positionFIFO.length}/${CONFIG.FIFO_SIZE})`;
           statusClass = 'inside';
           isAnker = false;
         } else {
-          // In Bewegung oder Track bereit
           statusText = isTracking ? '🚤 TRACK AKTIV - In Bewegung' : '🟢 IM Polygon - Track bereit';
           statusClass = isTracking ? 'tracking' : 'inside';
           isAnker = false;
@@ -350,67 +547,29 @@
     }
 
     // ============================================
-    // MAUSBEWEGUNGS-HANDLER
+    // MAUSBEWEGUNGS-HANDLER (für Desktop)
     // ============================================
     map.on('mousemove', function(e) {
-      const lat = e.latlng.lat;
-      const lng = e.latlng.lng;
-      const currentTime = Date.now();
-      
-      // Koordinaten anzeigen
-      document.getElementById('lat').textContent = lat.toFixed(6);
-      document.getElementById('lng').textContent = lng.toFixed(6);
-      
-      // Boot-Marker aktualisieren
-      if (!boatMarker) {
-        boatMarker = L.marker([lat, lng], { icon: boatIcon, zIndexOffset: 1000 }).addTo(map);
-      } else {
-        boatMarker.setLatLng([lat, lng]);
-      }
-      
-      // Immer Position im FIFO speichern (für Stillstandserkennung)
-      const currentPos = { lat, lng, time: currentTime };
-      
-      // FIFO aktualisieren (maximal CONFIG.FIFO_SIZE Punkte)
-      if (positionFIFO.length >= CONFIG.FIFO_SIZE) {
-        positionFIFO.shift(); // Ältesten Punkt entfernen
-      }
-      positionFIFO.push(currentPos);
-      
-      // Nur alle CONFIG.TRACK_INTERVAL ms einen Punkt zur Track-Linie hinzufügen
-      if (currentTime - lastTime > CONFIG.TRACK_INTERVAL || !lastTime) {
-        // Nur hinzufügen, wenn nicht Stillstand (alle Positionen im FIFO gleich)
-        const allSame = positionFIFO.length >= CONFIG.FIFO_SIZE &&
-                        positionFIFO.every(p => isSamePosition(p, positionFIFO[0]));
-        
-        if (!allSame) {
-          // Nur hinzufügen, wenn Bewegung erkannt wird
-          trackPoints.push([lat, lng]);
-          trackLine.setLatLngs(trackPoints);
-        }
-        
-        lastPosition = { lat, lng };
-        lastTime = currentTime;
-        
-        // Status prüfen
-        updateStatus(lat, lng);
-        
-        // Track-Logik: Nur wenn im Polygon
-        if (isInsidePolygon(lat, lng)) {
-          if (!isTracking) isTracking = true;
-        } else {
-          isTracking = false;
-          trackPoints = [];
-          trackLine.setLatLngs([]);
-          positionFIFO = [];
-        }
-      }
+      if (USES_REAL_GPS) return;
+      updatePosition(e.latlng.lat, e.latlng.lng);
     });
 
-    // Karte auf Polygon zoomen
+    // ============================================
+    // GPS-UPDATES (für Mobile)
+    // ============================================
+    function handleGPSUpdate(position) {
+      if (!USES_REAL_GPS) return;
+      updatePosition(position.coords.latitude, position.coords.longitude);
+    }
+
+    // ============================================
+    // KARTE ZENTRIEREN
+    // ============================================
     map.fitBounds(polygon.getBounds());
 
-    // Track zurücksetzen bei Klick
+    // ============================================
+    // TRACK ZURÜCKSETZEN
+    // ============================================
     map.on('click', function(e) {
       trackPoints = [];
       trackLine.setLatLngs([]);
@@ -419,8 +578,27 @@
       positionFIFO = [];
       lastPosition = null;
       lastTime = 0;
-      updateStatus(e.latlng.lat, e.latlng.lng);
+      if (!USES_REAL_GPS) {
+        updateStatus(e.latlng.lat, e.latlng.lng);
+      }
     });
+
+    // ============================================
+    // INITIALISIERUNG
+    // ============================================
+    initGPS();
+    
+    if (USES_REAL_GPS && navigator.geolocation) {
+      watchId = navigator.geolocation.watchPosition(
+        handleGPSUpdate,
+        (error) => { console.error('GPS-Fehler:', error); },
+        { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+      );
+    }
+    
+    if (!USES_REAL_GPS) {
+      updateStatus(47.6, 9.2);
+    }
   </script>
 </body>
 </html>
