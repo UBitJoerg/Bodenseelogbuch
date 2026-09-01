@@ -1,41 +1,77 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Bodensee-Polygon (OpenSeaMap + OSM)</title>
+  <title>Bodensee-Polygon (GPS Simulation mit Maus)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     #map { height: 600px; width: 100%; }
     body { margin: 0; padding: 0; }
+    #info {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: white;
+      padding: 10px;
+      border-radius: 5px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.2);
+      font-family: Arial, sans-serif;
+      z-index: 1000;
+    }
+    #status {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      background: white;
+      padding: 10px;
+      border-radius: 5px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.2);
+      font-family: Arial, sans-serif;
+      z-index: 1000;
+    }
+    .inside { background: #d4edda; }
+    .outside { background: #f8d7da; }
+    .tracking { background: #fff3cd; }
+    .anker { background: #e2e3e5; color: #383d41; }
   </style>
 </head>
 <body>
   <div id="map"></div>
+  <div id="info">
+    <strong>GPS Simulation</strong><br>
+    Lat: <span id="lat">-</span><br>
+    Lng: <span id="lng">-</span><br>
+    <small>Bewege die Maus über die Karte</small>
+  </div>
+  <div id="status">
+    <strong>Status:</strong> <span id="status-text">Warte auf Position...</span>
+  </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
+    // Karte initialisieren
     const map = L.map('map').setView([47.6, 9.2], 8);
 
-    // OpenStreetMap als Basiskarte (Hintergrund)
+    // OpenStreetMap als Basiskarte
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
     }).addTo(map);
 
-    // OpenSeaMap als Overlay (maritime Objekte: Häfen, Bojen, etc.)
+    // OpenSeaMap als Overlay
     L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', {
       attribution: 'Seamarks: &copy; <a href="https://www.openseamap.org">OpenSeaMap</a>'
     }).addTo(map);
 
-    // Polygon
+    // Polygon (deine 6 Eckpunkte)
     const polygon = L.polygon([
-      [47.627, 8.8278],
-      [47.646, 9.162],
-      [47.474, 9.482],
-      [47.417, 9.7458],
-      [47.562, 9.8175],
-      [47.850, 9.0167],
-      [47.627, 8.8278]
+      [47.627, 8.8278],   // Neuhausen TG (CH)
+      [47.646, 9.162],    // Kreuzlingen TG (CH)
+      [47.474, 9.482],    // Rorschach SG (CH)
+      [47.417, 9.7458],   // Dornbirn (AT)
+      [47.562, 9.8175],   // Möggers (AT)
+      [47.850, 9.0167],   // Stockach (DE)
+      [47.627, 8.8278]    // Rückschluss
     ], {
       color: 'red',
       weight: 3,
@@ -43,7 +79,139 @@
       fillOpacity: 0.2
     }).addTo(map);
 
+    // Track-Linie für die Simulation
+    let trackLine = L.polyline([], { color: 'blue', weight: 4, opacity: 0.8 }).addTo(map);
+    let trackPoints = [];
+    let boatMarker = null;
+    let lastPosition = null;
+    let lastTime = 0;
+    let isTracking = false;
+    let isAnker = false;
+
+    // Boot-Marker (Segelboot-Icon)
+    const boatIcon = L.icon({
+      iconUrl: 'https://cdn-icons-png.flaticon.com/512/4096/4096634.png',
+      iconSize: [32, 32],
+      iconAnchor: [16, 16]
+    });
+
+    // Funktion: Prüfe ob Punkt im Polygon liegt
+    function isInsidePolygon(lat, lng) {
+      return polygon.getBounds().contains([lat, lng]);
+    }
+
+    // Funktion: Berechne Abstand zwischen zwei Punkten in Metern
+    function getDistance(lat1, lng1, lat2, lng2) {
+      const R = 6371000; // Erdradius in Metern
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLng = (lng2 - lng1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLng / 2) * Math.sin(dLng / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    }
+
+    // Funktion: Prüfe ob sich das Boot bewegt
+    function isMoving(currentLat, currentLng) {
+      if (!lastPosition) return false;
+      
+      const distance = getDistance(
+        lastPosition.lat, lastPosition.lng,
+        currentLat, currentLng
+      );
+      
+      const currentTime = Date.now();
+      const timeDiff = currentTime - lastTime;
+      
+      // Bewegung: > 5m in den letzten 100ms (ca. 0.18 km/h)
+      const speed = distance / (timeDiff / 1000); // m/s
+      return speed > 0.1; // ~0.36 km/h (sehr langsame Bewegung)
+    }
+
+    // Funktion: Status aktualisieren
+    function updateStatus(lat, lng) {
+      const inside = isInsidePolygon(lat, lng);
+      const moving = isMoving(lat, lng);
+      
+      let statusText = '';
+      let statusClass = '';
+      
+      if (!inside) {
+        statusText = '⚠️ AUSSERHALB Bodensee-Polygon (kein Track möglich)';
+        statusClass = 'outside';
+        isTracking = false;
+        isAnker = false;
+      } else {
+        if (!isTracking) {
+          statusText = '🟢 IM Polygon - Track bereit';
+          statusClass = 'inside';
+        } else if (moving) {
+          statusText = '🚤 TRACK AKTIV - In Bewegung';
+          statusClass = 'tracking';
+        } else {
+          statusText = '⚓ Vor Anker (Stillstand)';
+          statusClass = 'anker';
+        }
+      }
+      
+      document.getElementById('status').className = statusClass;
+      document.getElementById('status-text').textContent = statusText;
+    }
+
+    // Mausbewegungs-Handler
+    map.on('mousemove', function(e) {
+      const lat = e.latlng.lat;
+      const lng = e.latlng.lng;
+      
+      // Koordinaten anzeigen
+      document.getElementById('lat').textContent = lat.toFixed(6);
+      document.getElementById('lng').textContent = lng.toFixed(6);
+      
+      // Boot-Marker aktualisieren
+      if (!boatMarker) {
+        boatMarker = L.marker([lat, lng], { icon: boatIcon, zIndexOffset: 1000 }).addTo(map);
+      } else {
+        boatMarker.setLatLng([lat, lng]);
+      }
+      
+      // Track-Linie aktualisieren
+      const currentTime = Date.now();
+      
+      // Nur alle 500ms einen Punkt hinzufügen (für glattere Linie)
+      if (currentTime - lastTime > 500 || !lastTime) {
+        trackPoints.push([lat, lng]);
+        trackLine.setLatLngs(trackPoints);
+        lastPosition = { lat, lng };
+        lastTime = currentTime;
+        
+        // Status prüfen
+        updateStatus(lat, lng);
+        
+        // Track-Logik: Nur wenn im Polygon
+        if (isInsidePolygon(lat, lng)) {
+          if (!isTracking) {
+            isTracking = true;
+          }
+        } else {
+          isTracking = false;
+          trackPoints = [];
+          trackLine.setLatLngs([]);
+        }
+      }
+    });
+
+    // Karte auf Polygon zoomen
     map.fitBounds(polygon.getBounds());
+
+    // Info: Track zurücksetzen bei Klick
+    map.on('click', function(e) {
+      trackPoints = [];
+      trackLine.setLatLngs([]);
+      isTracking = false;
+      isAnker = false;
+      updateStatus(e.latlng.lat, e.latlng.lng);
+    });
   </script>
 </body>
 </html>
