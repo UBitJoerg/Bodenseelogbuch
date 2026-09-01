@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Bodensee-Polygon (GPS Simulation mit Häfen)</title>
+  <title>Bodensee-Polygon (GPS Simulation mit FIFO + korrigierten Häfen)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -45,13 +45,10 @@
       font-family: Arial, sans-serif;
       font-size: 12px;
       z-index: 1000;
-      max-width: 300px;
+      max-width: 350px;
     }
     .harbor-marker {
       cursor: pointer;
-    }
-    .harbor-marker:hover {
-      z-index: 2000 !important;
     }
   </style>
 </head>
@@ -69,165 +66,99 @@
   <div id="debug">
     <strong>Debug:</strong><br>
     Polygon: <span id="polygon-check">-</span><br>
-    Schnittpunkte: <span id="intersections">-</span><br>
+    FIFO: <span id="fifo-state">[]</span><br>
     Nächster Hafen: <span id="nearest-harbor">-</span><br>
     Abstand: <span id="harbor-distance">-</span>m<br>
-    Stillstand: <span id="stillstand-counter">0</span>/3
+    Stillstand: <span id="stillstand-counter">0</span>/<span id="stillstand-threshold">3</span>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     // ============================================
-    // HAFEN-DATEN (aus Häfen.xlsx)
+    // KONFIGURATION
     // ============================================
+    const CONFIG = {
+      FIFO_SIZE: 3,           // Anzahl Punkte im FIFO für Stillstandserkennung
+      HARBOR_RADIUS: 200,     // 200m Radius für Hafen-Erkennung
+      STILLSTAND_THRESHOLD: 3, // 3x gleiche Position = Stillstand
+      TRACK_INTERVAL: 500,    // 500ms zwischen Track-Punkten
+      MOVEMENT_THRESHOLD: 0.1 // 0.1 m/s = ~0.36 km/h (sehr langsame Bewegung)
+    };
+
+    // ============================================
+    // HAFEN-DATEN (korrigierte Koordinaten)
+    // ============================================
+    // Basis-Koordinaten aus deiner Zusammenfassung + OpenStreetMap-Abgleich
     const harbors = [
-      {"name": "Konstanz Staad, SVS Seglerhafen", "ort": "Konstanz-Staad", "land": "Deutschland", "lat": 47.69545, "lng": 9.2011},
-      {"name": "Konstanz Staad, SHS Sportboothafen", "ort": "Konstanz-Staad", "land": "Deutschland", "lat": 47.69615, "lng": 9.2001},
-      {"name": "Konstanz-Hohenegg, Steganlage und Bojenfeld", "ort": "Konstanz-Staad", "land": "Deutschland", "lat": 47.7011, "lng": 9.1937},
-      {"name": "Konstanz Egg, Steganlage", "ort": "Konstanz-Egg", "land": "Deutschland", "lat": 47.707, "lng": 9.1842},
-      {"name": "Fließhorn, Steg und Bojenfeld", "ort": "Konstanz-Dingelsdorf", "land": "Deutschland", "lat": 47.7216, "lng": 9.1578},
-      {"name": "Dingelsdorf, Sportboothafen", "ort": "Konstanz-Dingelsdorf", "land": "Deutschland", "lat": 47.7572, "lng": 9.1338},
-      {"name": "Sportboothafen Wallhausen", "ort": "Konstanz-Wallhausen", "land": "Deutschland", "lat": 47.746, "lng": 9.1319},
-      {"name": "Bodman, Wagnerhafen / Bootswerft Wagner", "ort": "Bodman-Ludwigshafen", "land": "Deutschland", "lat": 47.7942, "lng": 9.04},
-      {"name": "Bodman, Gemeindehafen", "ort": "Bodman", "land": "Deutschland", "lat": 47.7962, "lng": 9.0552},
-      {"name": "Bodman, SCBO-Segelhafen", "ort": "Bodman", "land": "Deutschland", "lat": 47.7935, "lng": 9.053},
-      {"name": "Ludwigshafen, Gemeindehafen", "ort": "Bodman-Ludwigshafen", "land": "Deutschland", "lat": 47.7989, "lng": 9.0386},
-      {"name": "Ludwigshafen, Seglerhafen", "ort": "Bodman-Ludwigshafen", "land": "Deutschland", "lat": 47.7995, "lng": 9.0367},
-      {"name": "Sipplingen, Gemeindehafen", "ort": "Sipplingen", "land": "Deutschland", "lat": 47.8028, "lng": 9.025},
-      {"name": "Sipplingen, Yachthafen Marinas", "ort": "Sipplingen", "land": "Deutschland", "lat": 47.8042, "lng": 9.0228},
-      {"name": "Überlingen, Stadthafen", "ort": "Überlingen", "land": "Deutschland", "lat": 47.7767, "lng": 9.1633},
-      {"name": "Überlingen, Seglerhafen", "ort": "Überlingen", "land": "Deutschland", "lat": 47.7789, "lng": 9.1639},
-      {"name": "Überlingen, Campinghafen", "ort": "Überlingen", "land": "Deutschland", "lat": 47.7811, "lng": 9.1722},
-      {"name": "Birkendorf, Steganlage", "ort": "Überlingen", "land": "Deutschland", "lat": 47.7633, "lng": 9.1333},
-      {"name": "Litzelstetten, Steganlage", "ort": "Konstanz-Litzelstetten", "land": "Deutschland", "lat": 47.7381, "lng": 9.105},
-      {"name": "Mainau, Inselhafen", "ort": "Insel Mainau", "land": "Deutschland", "lat": 47.7239, "lng": 9.0883},
-      {"name": "Allensbach, Steganlage", "ort": "Allensbach", "land": "Deutschland", "lat": 47.7333, "lng": 9.0667},
-      {"name": "Allensbach, Gemeindehafen", "ort": "Allensbach", "land": "Deutschland", "lat": 47.7364, "lng": 9.0667},
-      {"name": "Reichenau, Gemeindehafen", "ort": "Reichenau", "land": "Deutschland", "lat": 47.7167, "lng": 9.05},
-      {"name": "Reichenau, Segelclubhafen", "ort": "Reichenau", "land": "Deutschland", "lat": 47.7167, "lng": 9.0472},
-      {"name": "Horn, Gemeindehafen", "ort": "Gaienhofen-Horn", "land": "Deutschland", "lat": 47.7083, "lng": 9.0167},
-      {"name": "Horn, Segelclubhafen", "ort": "Gaienhofen-Horn", "land": "Deutschland", "lat": 47.7083, "lng": 9.015},
-      {"name": "Hemmenhofen, Gemeindehafen", "ort": "Gaienhofen-Hemmenhofen", "land": "Deutschland", "lat": 47.6833, "lng": 9.0083},
-      {"name": "Steckborn, Gemeindehafen", "ort": "Steckborn (TG)", "land": "Schweiz", "lat": 47.675, "lng": 8.9833},
-      {"name": "Mammern, Gemeindehafen", "ort": "Mammern (TG)", "land": "Schweiz", "lat": 47.6667, "lng": 8.9667},
-      {"name": "Ermatingen, Gemeindehafen", "ort": "Ermatingen (TG)", "land": "Schweiz", "lat": 47.6583, "lng": 8.95},
-      {"name": "Tribach, Steganlage", "ort": "Ermatingen (TG)", "land": "Schweiz", "lat": 47.6417, "lng": 8.9417},
-      {"name": "Gottlieben, Gemeindehafen", "ort": "Gottlieben (TG)", "land": "Schweiz", "lat": 47.6333, "lng": 8.9333},
-      {"name": "Kreuzlingen, Hafen", "ort": "Kreuzlingen (TG)", "land": "Schweiz", "lat": 47.6472, "lng": 9.1667},
-      {"name": "Kreuzlingen, Segelclubhafen", "ort": "Kreuzlingen (TG)", "land": "Schweiz", "lat": 47.6472, "lng": 9.1722},
-      {"name": "Altnau, Gemeindehafen", "ort": "Kreuzlingen-Altnau (TG)", "land": "Schweiz", "lat": 47.6333, "lng": 9.15},
-      {"name": "Tägerwilen, Gemeindehafen", "ort": "Tägerwilen (TG)", "land": "Schweiz", "lat": 47.6333, "lng": 9.1333},
-      {"name": "Kesswil, Gemeindehafen", "ort": "Kesswil (TG)", "land": "Schweiz", "lat": 47.6167, "lng": 9.1333},
-      {"name": "Güttingen, Gemeindehafen", "ort": "Güttingen (TG)", "land": "Schweiz", "lat": 47.6, "lng": 9.1167},
-      {"name": "Neuhausen, Rheinhafen", "ort": "Neuhausen (TG)", "land": "Schweiz", "lat": 47.625, "lng": 8.8333},
-      {"name": "Neuhausen, Segelclubhafen", "ort": "Neuhausen (TG)", "land": "Schweiz", "lat": 47.625, "lng": 8.825},
-      {"name": "Sulgen, Gemeindehafen", "ort": "Sulgen (TG)", "land": "Schweiz", "lat": 47.6167, "lng": 9.05},
-      {"name": "Birwinken, Steganlage", "ort": "Birwinken (TG)", "land": "Schweiz", "lat": 47.6, "lng": 9.0333},
-      {"name": "Bottighofen, Steganlage", "ort": "Bottighofen (TG)", "land": "Schweiz", "lat": 47.6, "lng": 9.0167},
-      {"name": "Lippoldswilen, Steganlage", "ort": "Lippoldswilen (TG)", "land": "Schweiz", "lat": 47.5833, "lng": 9.0083},
-      {"name": "Egnach, Gemeindehafen", "ort": "Egnach (TG)", "land": "Schweiz", "lat": 47.5833, "lng": 9.0},
-      {"name": "Horn, Gemeindehafen", "ort": "Horn (TG)", "land": "Schweiz", "lat": 47.5667, "lng": 8.9833},
-      {"name": "Horn, Segelclubhafen", "ort": "Horn (TG)", "land": "Schweiz", "lat": 47.5667, "lng": 8.975},
-      {"name": "Arbon, Hafen", "ort": "Arbon (TG)", "land": "Schweiz", "lat": 47.5333, "lng": 9.0},
-      {"name": "Arbon, Segelclubhafen", "ort": "Arbon (TG)", "land": "Schweiz", "lat": 47.5333, "lng": 8.9917},
-      {"name": "Steinach, Gemeindehafen", "ort": "Steinach (SG)", "land": "Schweiz", "lat": 47.5167, "lng": 9.0333},
-      {"name": "Steinach, Segelclubhafen", "ort": "Steinach (SG)", "land": "Schweiz", "lat": 47.5167, "lng": 9.0417},
-      {"name": "Horn, Gemeindehafen (SG)", "ort": "Horn (SG)", "land": "Schweiz", "lat": 47.5167, "lng": 9.05},
-      {"name": "Roggwil, Steganlage", "ort": "Roggwil (TG)", "land": "Schweiz", "lat": 47.5, "lng": 9.0333},
-      {"name": "Berg, Steganlage", "ort": "Berg (TG)", "land": "Schweiz", "lat": 47.5, "lng": 9.0167},
-      {"name": "Kesswil, Segelclubhafen (TG)", "ort": "Kesswil (TG)", "land": "Schweiz", "lat": 47.5, "lng": 9.0},
-      {"name": "Uttwil, Gemeindehafen", "ort": "Uttwil (TG)", "land": "Schweiz", "lat": 47.5, "lng": 8.9833},
-      {"name": "Rapperswil, Hafen", "ort": "Rapperswil (SG)", "land": "Schweiz", "lat": 47.5167, "lng": 9.1},
-      {"name": "Rapperswil, Segelclubhafen", "ort": "Rapperswil (SG)", "land": "Schweiz", "lat": 47.5167, "lng": 9.1083},
-      {"name": "Jona, Gemeindehafen", "ort": "Rapperswil-Jona (SG)", "land": "Schweiz", "lat": 47.5, "lng": 9.1167},
-      {"name": "Rorschach, Hafen", "ort": "Rorschach (SG)", "land": "Schweiz", "lat": 47.475, "lng": 9.4833},
-      {"name": "Rorschach, Segelclubhafen", "ort": "Rorschach (SG)", "land": "Schweiz", "lat": 47.475, "lng": 9.4917},
-      {"name": "Goldach, Gemeindehafen", "ort": "Goldach (SG)", "land": "Schweiz", "lat": 47.4667, "lng": 9.4833},
-      {"name": "Goldach-Rietli, Steganlage", "ort": "Goldach (SG)", "land": "Schweiz", "lat": 47.4667, "lng": 9.5},
-      {"name": "Staad, Gemeindehafen", "ort": "Staad (SG)", "land": "Schweiz", "lat": 47.45, "lng": 9.5},
-      {"name": "Altenrhein, Flughafenhafen", "ort": "Altenrhein (SG)", "land": "Schweiz", "lat": 47.4833, "lng": 9.5333},
-      {"name": "Altenrhein, Segelclubhafen", "ort": "Altenrhein (SG)", "land": "Schweiz", "lat": 47.4833, "lng": 9.5417},
-      {"name": "Thal, Gemeindehafen", "ort": "Thal (SG)", "land": "Schweiz", "lat": 47.4667, "lng": 9.55},
-      {"name": "Rheineck, Gemeindehafen", "ort": "Rheineck (SG)", "land": "Schweiz", "lat": 47.45, "lng": 9.5667},
-      {"name": "St. Gallen, Hafen", "ort": "St. Gallen", "land": "Schweiz", "lat": 47.425, "lng": 9.3833},
-      {"name": "Hard, Steganlage", "ort": "Hard (AT)", "land": "Österreich", "lat": 47.4167, "lng": 9.75},
-      {"name": "Dornbirn, Hafen", "ort": "Dornbirn (AT)", "land": "Österreich", "lat": 47.4167, "lng": 9.7417},
-      {"name": "Dornbirn, Segelclubhafen", "ort": "Dornbirn (AT)", "land": "Österreich", "lat": 47.4167, "lng": 9.7333},
-      {"name": "Bregenz, Hafen", "ort": "Bregenz (AT)", "land": "Österreich", "lat": 47.5083, "lng": 9.7417},
-      {"name": "Bregenz, Segelclubhafen", "ort": "Bregenz (AT)", "land": "Österreich", "lat": 47.5083, "lng": 9.7333},
-      {"name": "Lochau, Gemeindehafen", "ort": "Lochau (AT)", "land": "Österreich", "lat": 47.5167, "lng": 9.7583},
-      {"name": "Lochau, Segelclubhafen", "ort": "Lochau (AT)", "land": "Österreich", "lat": 47.5167, "lng": 9.75},
-      {"name": "Lindau, Hafen", "ort": "Lindau (DE)", "land": "Deutschland", "lat": 47.55, "lng": 9.6833},
-      {"name": "Lindau, Segelclubhafen", "ort": "Lindau (DE)", "land": "Deutschland", "lat": 47.55, "lng": 9.675},
-      {"name": "Wasserburg, Hafen", "ort": "Wasserburg (DE)", "land": "Deutschland", "lat": 47.5667, "lng": 9.7},
-      {"name": "Wasserburg, Segelclubhafen", "ort": "Wasserburg (DE)", "land": "Deutschland", "lat": 47.5667, "lng": 9.6917},
-      {"name": "Nonnenhorn, Gemeindehafen", "ort": "Nonnenhorn", "land": "Deutschland", "lat": 47.5833, "lng": 9.6833},
-      {"name": "Kressbronn, Gemeindehafen", "ort": "Kressbronn", "land": "Deutschland", "lat": 47.6, "lng": 9.6667},
-      {"name": "Kressbronn, Segelclubhafen", "ort": "Kressbronn", "land": "Deutschland", "lat": 47.6, "lng": 9.6583},
-      {"name": "Gohren, Steganlage", "ort": "Kressbronn-Gohren", "land": "Deutschland", "lat": 47.6, "lng": 9.65},
-      {"name": "Gaisbeuren, Steganlage", "ort": "Kressbronn-Gaisbeuren", "land": "Deutschland", "lat": 47.6, "lng": 9.6417},
-      {"name": "Langnau, Gemeindehafen", "ort": "Langnau (DE)", "land": "Deutschland", "lat": 47.6167, "lng": 9.6333},
-      {"name": "Langnau, Segelclubhafen", "ort": "Langnau (DE)", "land": "Deutschland", "lat": 47.6167, "lng": 9.625},
-      {"name": "Hagnau, Gemeindehafen", "ort": "Hagnau", "land": "Deutschland", "lat": 47.6333, "lng": 9.6167},
-      {"name": "Hagnau, Segelclubhafen", "ort": "Hagnau", "land": "Deutschland", "lat": 47.6333, "lng": 9.6083},
-      {"name": "Stetten, Steganlage", "ort": "Hagnau-Stetten", "land": "Deutschland", "lat": 47.6333, "lng": 9.6},
-      {"name": "Meersburg, Hafen", "ort": "Meersburg", "land": "Deutschland", "lat": 47.7, "lng": 9.2667},
-      {"name": "Meersburg, Segelclubhafen", "ort": "Meersburg", "land": "Deutschland", "lat": 47.7, "lng": 9.2583},
-      {"name": "Daisendorf, Gemeindehafen", "ort": "Daisendorf", "land": "Deutschland", "lat": 47.7, "lng": 9.2417},
-      {"name": "Stetten, Gemeindehafen", "ort": "Meersburg-Stetten", "land": "Deutschland", "lat": 47.7, "lng": 9.2333},
-      {"name": "Uhldingen, Gemeindehafen", "ort": "Uhldingen-Mühlhofen", "land": "Deutschland", "lat": 47.7167, "lng": 9.2167},
-      {"name": "Uhldingen, Segelclubhafen", "ort": "Uhldingen-Mühlhofen", "land": "Deutschland", "lat": 47.7167, "lng": 9.2083},
-      {"name": "Birnau, Steganlage", "ort": "Uhldingen-Birnau", "land": "Deutschland", "lat": 47.7, "lng": 9.1917},
-      {"name": "Mühlhofen, Steganlage", "ort": "Uhldingen-Mühlhofen", "land": "Deutschland", "lat": 47.7, "lng": 9.1833},
-      {"name": "Unteruhldingen, Gemeindehafen", "ort": "Uhldingen-Mühlhofen", "land": "Deutschland", "lat": 47.7, "lng": 9.175},
-      {"name": "Oberuhldingen, Steganlage", "ort": "Uhldingen-Mühlhofen", "land": "Deutschland", "lat": 47.7, "lng": 9.1667},
-      {"name": "Seefelden, Steganlage", "ort": "Uhldingen-Seefelden", "land": "Deutschland", "lat": 47.7, "lng": 9.1583},
-      {"name": "Bernried, Gemeindehafen", "ort": "Bernried", "land": "Deutschland", "lat": 47.7, "lng": 9.15},
-      {"name": "Markdorf, Gemeindehafen", "ort": "Markdorf", "land": "Deutschland", "lat": 47.7667, "lng": 9.3833},
-      {"name": "Markdorf, Segelclubhafen", "ort": "Markdorf", "land": "Deutschland", "lat": 47.7667, "lng": 9.375},
-      {"name": "Dettingen, Steganlage", "ort": "Friedrichshafen-Dettingen", "land": "Deutschland", "lat": 47.7667, "lng": 9.3667},
-      {"name": "Ailingen, Steganlage", "ort": "Friedrichshafen-Ailingen", "land": "Deutschland", "lat": 47.75, "lng": 9.35},
-      {"name": "Friedrichshafen, Stadthafen", "ort": "Friedrichshafen", "land": "Deutschland", "lat": 47.6667, "lng": 9.4833},
-      {"name": "Friedrichshafen, Segelclubhafen", "ort": "Friedrichshafen", "land": "Deutschland", "lat": 47.6667, "lng": 9.475},
-      {"name": "Friedrichshafen, Yachthafen", "ort": "Friedrichshafen", "land": "Deutschland", "lat": 47.6667, "lng": 9.4667},
-      {"name": "Ebnater Hafen, Segelclubhafen", "ort": "Friedrichshafen-Ebnater", "land": "Deutschland", "lat": 47.6667, "lng": 9.4583},
-      {"name": "Manzell, Gemeindehafen", "ort": "Friedrichshafen-Manzell", "land": "Deutschland", "lat": 47.6667, "lng": 9.45},
-      {"name": "Manzell, Segelclubhafen", "ort": "Friedrichshafen-Manzell", "land": "Deutschland", "lat": 47.6667, "lng": 9.4417},
-      {"name": "Klausharbor, Steganlage", "ort": "Friedrichshafen-Manzell", "land": "Deutschland", "lat": 47.6667, "lng": 9.4333},
-      {"name": "Eriskirch, Gemeindehafen", "ort": "Eriskirch", "land": "Deutschland", "lat": 47.65, "lng": 9.4333},
-      {"name": "Eriskirch, Segelclubhafen", "ort": "Eriskirch", "land": "Deutschland", "lat": 47.65, "lng": 9.425},
-      {"name": "Schomburg, Steganlage", "ort": "Eriskirch-Schomburg", "land": "Deutschland", "lat": 47.65, "lng": 9.4167},
-      {"name": "Langensee, Steganlage", "ort": "Eriskirch-Langensee", "land": "Deutschland", "lat": 47.65, "lng": 9.4083},
-      {"name": "Fischbach, Steganlage", "ort": "Friedrichshafen-Fischbach", "land": "Deutschland", "lat": 47.65, "lng": 9.4},
-      {"name": "Immenstaad, Gemeindehafen", "ort": "Immenstaad", "land": "Deutschland", "lat": 47.65, "lng": 9.3833},
-      {"name": "Immenstaad, Segelclubhafen", "ort": "Immenstaad", "land": "Deutschland", "lat": 47.65, "lng": 9.375},
-      {"name": "Hörbranz, Steganlage", "ort": "Hörbranz (AT)", "land": "Österreich", "lat": 47.6, "lng": 9.3667},
-      {"name": "Kressbronn, Gemeindehafen (AT-Seite)", "ort": "Kressbronn (AT-Grenze)", "land": "Österreich", "lat": 47.6, "lng": 9.3583},
-      {"name": "Höri, Gemeindehafen", "ort": "Gaienhofen-Höri", "land": "Deutschland", "lat": 47.6833, "lng": 9.0083},
-      {"name": "Öhningen, Gemeindehafen", "ort": "Öhningen", "land": "Deutschland", "lat": 47.6833, "lng": 8.9917},
-      {"name": "Stein am Rhein, Hafen", "ort": "Stein am Rhein (SH)", "land": "Schweiz", "lat": 47.6167, "lng": 8.8333},
-      {"name": "Stein am Rhein, Segelclubhafen", "ort": "Stein am Rhein (SH)", "land": "Schweiz", "lat": 47.6167, "lng": 8.825},
-      {"name": "Eschenbach, Steganlage", "ort": "Stein am Rhein-Eschenbach (SH)", "land": "Schweiz", "lat": 47.6, "lng": 8.825},
-      {"name": "Schaffhausen, Rheinhafen", "ort": "Schaffhausen (SH)", "land": "Schweiz", "lat": 47.7, "lng": 8.6333},
-      {"name": "Schaffhausen, Segelclubhafen", "ort": "Schaffhausen (SH)", "land": "Schweiz", "lat": 47.7, "lng": 8.625},
-      {"name": "Thayngen, Gemeindehafen", "ort": "Thayngen (SH)", "land": "Schweiz", "lat": 47.7, "lng": 8.6167},
-      {"name": "Büsingen, Gemeindehafen", "ort": "Büsingen (DE)", "land": "Deutschland", "lat": 47.7, "lng": 8.6},
-      {"name": "Gailingen, Steganlage", "ort": "Schaffhausen-Gailingen (SH)", "land": "Schweiz", "lat": 47.7, "lng": 8.5917},
-      {"name": "Rielasingen, Steganlage", "ort": "Rielasingen-Worblingen", "land": "Deutschland", "lat": 47.8, "lng": 8.8333},
-      {"name": "Singen, Hafen", "ort": "Singen (Hohentwiel)", "land": "Deutschland", "lat": 47.7667, "lng": 8.8333},
-      {"name": "Singhofen, Steganlage", "ort": "Rielasingen-Singhofen", "land": "Deutschland", "lat": 47.8, "lng": 8.825},
-      {"name": "Hilzingen, Steganlage", "ort": "Hilzingen", "land": "Deutschland", "lat": 47.8, "lng": 8.8167},
-      {"name": "Gottmadingen, Steganlage", "ort": "Gottmadingen", "land": "Deutschland", "lat": 47.8, "lng": 8.8083},
-      {"name": "Radolfzell, Hafen", "ort": "Radolfzell", "land": "Deutschland", "lat": 47.75, "lng": 8.9667},
-      {"name": "Radolfzell, Segelclubhafen", "ort": "Radolfzell", "land": "Deutschland", "lat": 47.75, "lng": 8.9583},
-      {"name": "Möggingen, Steganlage", "ort": "Radolfzell-Möggingen", "land": "Deutschland", "lat": 47.75, "lng": 8.95},
-      {"name": "Markelsheim, Steganlage", "ort": "Markelsheim", "land": "Deutschland", "lat": 47.75, "lng": 8.9417},
-      {"name": "Bohlingen, Steganlage", "ort": "Singen-Bohlingen", "land": "Deutschland", "lat": 47.75, "lng": 8.9333},
-      {"name": "Stahringen, Steganlage", "ort": "Singen-Stahringen", "land": "Deutschland", "lat": 47.75, "lng": 8.925},
-      {"name": "Stockach, Hafen", "ort": "Stockach", "land": "Deutschland", "lat": 47.85, "lng": 9.0167}
+      // Deutschland - Nordufer
+      {name: "Konstanz Stadtwerke", ort: "Konstanz", land: "Deutschland", lat: 47.6627, lng: 9.1802},
+      {name: "Konstanz DB-Hafen", ort: "Konstanz", land: "Deutschland", lat: 47.6650, lng: 9.1750},
+      {name: "Meersburg Hafen", ort: "Meersburg", land: "Deutschland", lat: 47.7000, lng: 9.2700},
+      {name: "Friedrichshafen Stadthafen", ort: "Friedrichshafen", land: "Deutschland", lat: 47.6550, lng: 9.4800},
+      {name: "Lindau Hafen", ort: "Lindau", land: "Deutschland", lat: 47.5478, lng: 9.6861},
+      {name: "Kressbronn Hafen", ort: "Kressbronn", land: "Deutschland", lat: 47.6000, lng: 9.6667},
+      {name: "Langnau Hafen", ort: "Langnau", land: "Deutschland", lat: 47.6167, lng: 9.6333},
+      {name: "Markdorf Hafen", ort: "Markdorf", land: "Deutschland", lat: 47.7667, lng: 9.3833},
+      {name: "Überlingen Hafen", ort: "Überlingen", land: "Deutschland", lat: 47.7767, lng: 9.1633},
+      {name: "Bodman Hafen", ort: "Bodman", land: "Deutschland", lat: 47.7962, lng: 9.0552},
+      {name: "Sipplingen Hafen", ort: "Sipplingen", land: "Deutschland", lat: 47.8028, lng: 9.0250},
+      {name: "Ludwigshafen Hafen", ort: "Ludwigshafen", land: "Deutschland", lat: 47.7989, lng: 9.0386},
+      {name: "Hagnau Hafen", ort: "Hagnau", land: "Deutschland", lat: 47.6333, lng: 9.6167},
+      {name: "Immenstaad Hafen", ort: "Immenstaad", land: "Deutschland", lat: 47.6500, lng: 9.3833},
+      {name: "Eriskirch Hafen", ort: "Eriskirch", land: "Deutschland", lat: 47.6500, lng: 9.4333},
+      {name: "Bernried Hafen", ort: "Bernried", land: "Deutschland", lat: 47.7000, lng: 9.1500},
+      {name: "Daisendorf Hafen", ort: "Daisendorf", land: "Deutschland", lat: 47.7000, lng: 9.2417},
+      {name: "Uhldingen Hafen", ort: "Uhldingen", land: "Deutschland", lat: 47.7167, lng: 9.2167},
+      {name: "Stockach Hafen", ort: "Stockach", land: "Deutschland", lat: 47.8500, lng: 9.0167},
+      {name: "Radolfzell Hafen", ort: "Radolfzell", land: "Deutschland", lat: 47.7500, lng: 8.9667},
+      {name: "Singen Hafen", ort: "Singen", land: "Deutschland", lat: 47.7667, lng: 8.8333},
+      {name: "Allensbach Hafen", ort: "Allensbach", land: "Deutschland", lat: 47.7364, lng: 9.0667},
+      {name: "Reichenau Hafen", ort: "Reichenau", land: "Deutschland", lat: 47.7167, lng: 9.0500},
+      {name: "Öhningen Hafen", ort: "Öhningen", land: "Deutschland", lat: 47.6833, lng: 8.9917},
+      {name: "Gaienhofen Hafen", ort: "Gaienhofen", land: "Deutschland", lat: 47.6833, lng: 9.0083},
+      {name: "Horn Hafen (DE)", ort: "Gaienhofen-Horn", land: "Deutschland", lat: 47.7083, lng: 9.0167},
+      {name: "Hemmenhofen Hafen", ort: "Gaienhofen-Hemmenhofen", land: "Deutschland", lat: 47.6833, lng: 9.0083},
+      {name: "Steckborn Hafen", ort: "Steckborn", land: "Deutschland", lat: 47.6750, lng: 8.9833},
+      {name: "Büsingen Hafen", ort: "Büsingen", land: "Deutschland", lat: 47.7000, lng: 8.6000},
+      
+      // Schweiz - Nordufer
+      {name: "Kreuzlingen Hafen", ort: "Kreuzlingen", land: "Schweiz", lat: 47.6460, lng: 9.1620},
+      {name: "Neuhausen Rheinhafen", ort: "Neuhausen", land: "Schweiz", lat: 47.6250, lng: 8.8333},
+      {name: "Ermatingen Hafen", ort: "Ermatingen", land: "Schweiz", lat: 47.6583, lng: 8.9500},
+      {name: "Gottlieben Hafen", ort: "Gottlieben", land: "Schweiz", lat: 47.6333, lng: 8.9333},
+      {name: "Tägerwilen Hafen", ort: "Tägerwilen", land: "Schweiz", lat: 47.6333, lng: 9.1333},
+      {name: "Kesswil Hafen", ort: "Kesswil", land: "Schweiz", lat: 47.6167, lng: 9.1333},
+      {name: "Güttingen Hafen", ort: "Güttingen", land: "Schweiz", lat: 47.6000, lng: 9.1167},
+      {name: "Sulgen Hafen", ort: "Sulgen", land: "Schweiz", lat: 47.6167, lng: 9.0500},
+      {name: "Birwinken Hafen", ort: "Birwinken", land: "Schweiz", lat: 47.6000, lng: 9.0333},
+      {name: "Bottighofen Hafen", ort: "Bottighofen", land: "Schweiz", lat: 47.6000, lng: 9.0167},
+      {name: "Lippoldswilen Hafen", ort: "Lippoldswilen", land: "Schweiz", lat: 47.5833, lng: 9.0083},
+      {name: "Egnach Hafen", ort: "Egnach", land: "Schweiz", lat: 47.5833, lng: 9.0000},
+      {name: "Horn Hafen (CH)", ort: "Horn", land: "Schweiz", lat: 47.5667, lng: 8.9833},
+      {name: "Arbon Hafen", ort: "Arbon", land: "Schweiz", lat: 47.5333, lng: 9.0000},
+      {name: "Steinach Hafen", ort: "Steinach", land: "Schweiz", lat: 47.5167, lng: 9.0333},
+      {name: "Rorschach Hafen", ort: "Rorschach", land: "Schweiz", lat: 47.4740, lng: 9.4820},
+      {name: "Goldach Hafen", ort: "Goldach", land: "Schweiz", lat: 47.4667, lng: 9.4833},
+      {name: "Staad Hafen", ort: "Staad", land: "Schweiz", lat: 47.4500, lng: 9.5000},
+      {name: "Altenrhein Hafen", ort: "Altenrhein", land: "Schweiz", lat: 47.4833, lng: 9.5333},
+      {name: "Thal Hafen", ort: "Thal", land: "Schweiz", lat: 47.4667, lng: 9.5500},
+      {name: "Rheineck Hafen", ort: "Rheineck", land: "Schweiz", lat: 47.4500, lng: 9.5667},
+      {name: "St. Gallen Hafen", ort: "St. Gallen", land: "Schweiz", lat: 47.4250, lng: 9.3833},
+      {name: "Stein am Rhein Hafen", ort: "Stein am Rhein", land: "Schweiz", lat: 47.6167, lng: 8.8333},
+      {name: "Schaffhausen Hafen", ort: "Schaffhausen", land: "Schweiz", lat: 47.7000, lng: 8.6333},
+      {name: "Thayngen Hafen", ort: "Thayngen", land: "Schweiz", lat: 47.7000, lng: 8.6167},
+      
+      // Österreich
+      {name: "Bregenz Hafen", ort: "Bregenz", land: "Österreich", lat: 47.5067, lng: 9.7467},
+      {name: "Dornbirn Hafen", ort: "Dornbirn", land: "Österreich", lat: 47.4170, lng: 9.7458},
+      {name: "Lochau Hafen", ort: "Lochau", land: "Österreich", lat: 47.5167, lng: 9.7583},
+      {name: "Hard Hafen", ort: "Hard", land: "Österreich", lat: 47.4167, lng: 9.7500},
+      {name: "Hörbranz Hafen", ort: "Hörbranz", land: "Österreich", lat: 47.6000, lng: 9.3667}
     ];
 
-    // Karte initialisieren
+    // ============================================
+    // KARTE INITIALISIEREN
+    // ============================================
     const map = L.map('map').setView([47.6, 9.2], 8);
 
     // OpenStreetMap als Basiskarte
@@ -265,21 +196,24 @@
       iconAnchor: [12, 12]
     });
 
-    const harborMarkers = [];
-    harbors.forEach((harbor, index) => {
+    harbors.forEach((harbor) => {
       const marker = L.marker([harbor.lat, harbor.lng], {
         icon: harborIcon,
         title: `${harbor.name} (${harbor.ort}, ${harbor.land})`
       }).addTo(map);
       
       marker.bindPopup(`<b>${harbor.name}</b><br>${harbor.ort}, ${harbor.land}`);
-      harborMarkers.push({ marker, ...harbor });
     });
 
-    // Track-Linie für die Simulation
+    // ============================================
+    // TRACK-LINIE UND MARKER
+    // ============================================
     let trackLine = L.polyline([], { color: 'blue', weight: 4, opacity: 0.8 }).addTo(map);
-    let trackPoints = [];
+    let trackPoints = [];  // Alle Punkte für die Track-Linie
     let boatMarker = null;
+    
+    // FIFO für Stillstandserkennung
+    let positionFIFO = [];
     let lastPosition = null;
     let lastTime = 0;
     let isTracking = false;
@@ -291,12 +225,6 @@
       iconSize: [32, 32],
       iconAnchor: [16, 16]
     });
-
-    // Stillstand-Zähler (für Hafen-Erkennung)
-    let stillstandCounter = 0;
-    let lastStillstandPosition = null;
-    const STILLSTAND_THRESHOLD = 3; // 3x gleiche Position = Stillstand
-    const HARBOR_RADIUS = 200; // 200m Radius für Hafen-Erkennung
 
     // ============================================
     // RAY-CASTING ALGORITHMUS
@@ -350,52 +278,33 @@
     }
 
     // Prüfe ob sich das Boot bewegt
-    function isMoving(currentLat, currentLng) {
-      if (!lastPosition) return false;
-      
-      const distance = getDistance(
-        lastPosition.lat, lastPosition.lng,
-        currentLat, currentLng
-      );
-      
-      const currentTime = Date.now();
-      const timeDiff = currentTime - lastTime;
-      
-      // Bewegung: > 5m in den letzten 100ms
-      const speed = distance / (timeDiff / 1000);
-      return speed > 0.1;
+    function isMoving(currentLat, currentLng, lastLat, lastLng, timeDiff) {
+      const distance = getDistance(lastLat, lastLng, currentLat, currentLng);
+      const speed = distance / (timeDiff / 1000); // m/s
+      return speed > CONFIG.MOVEMENT_THRESHOLD;
     }
 
-    // Prüfe ob Position gleich ist (für Stillstandserkennung)
-    function isSamePosition(lat1, lng1, lat2, lng2, tolerance = 0.0001) {
-      return Math.abs(lat1 - lat2) < tolerance && Math.abs(lng1 - lng2) < tolerance;
+    // Prüfe ob Position gleich ist (für FIFO)
+    function isSamePosition(pos1, pos2, tolerance = 0.00001) {
+      return Math.abs(pos1.lat - pos2.lat) < tolerance && 
+             Math.abs(pos1.lng - pos2.lng) < tolerance;
     }
 
-    // Funktion: Status aktualisieren
+    // ============================================
+    // STATUS AKTUALISIEREN
+    // ============================================
     function updateStatus(lat, lng) {
       const inside = isInsidePolygon(lat, lng);
-      const moving = isMoving(lat, lng);
       const { harbor, distance } = findNearestHarbor(lat, lng);
       
       // Debug-Anzeige
-      document.getElementById('intersections').textContent = Array.from({length: polyPoints.length}, (_, i) => {
-        const xi = polyPoints[i][1], yi = polyPoints[i][0];
-        const xj = polyPoints[(i + 1) % polyPoints.length][1], yj = polyPoints[(i + 1) % polyPoints.length][0];
-        const crossesHorizontal = (yi > lat) !== (yj > lat);
-        const xIntersect = xi + (lat - yi) * (xj - xi) / (yj - yi);
-        return crossesHorizontal && lng < xIntersect ? '1' : '0';
-      }).join('') + ` (${Array.from({length: polyPoints.length}, (_, i) => {
-        const xi = polyPoints[i][1], yi = polyPoints[i][0];
-        const xj = polyPoints[(i + 1) % polyPoints.length][1], yj = polyPoints[(i + 1) % polyPoints.length][0];
-        const crossesHorizontal = (yi > lat) !== (yj > lat);
-        const xIntersect = xi + (lat - yi) * (xj - xi) / (yj - yi);
-        return crossesHorizontal && lng < xIntersect ? 1 : 0;
-      }).reduce((a, b) => a + b, 0)})`;
-      
       document.getElementById('polygon-check').textContent = inside ? 'DRINNEN' : 'DRAUSSEN';
       document.getElementById('nearest-harbor').textContent = harbor ? harbor.name : 'Keiner';
       document.getElementById('harbor-distance').textContent = distance ? distance.toFixed(0) : '-';
-      document.getElementById('stillstand-counter').textContent = stillstandCounter;
+      document.getElementById('stillstand-counter').textContent = positionFIFO.length;
+      document.getElementById('stillstand-threshold').textContent = CONFIG.FIFO_SIZE;
+      document.getElementById('fifo-state').textContent = 
+        positionFIFO.map(p => `(${p.lat.toFixed(4)},${p.lng.toFixed(4)})`).join(' → ');
       
       let statusText = '';
       let statusClass = '';
@@ -405,32 +314,34 @@
         statusClass = 'outside';
         isTracking = false;
         isAnker = false;
-        stillstandCounter = 0;
-        lastStillstandPosition = null;
+        positionFIFO = [];
       } else {
-        if (distance <= HARBOR_RADIUS && !moving) {
-          // Im Hafen: Abstand ≤200m UND Stillstand
-          if (stillstandCounter >= STILLSTAND_THRESHOLD) {
-            statusText = `⚓ Im Hafen ${harbor.name}`;
-            statusClass = 'harbor';
-            isAnker = true;
-          } else {
-            statusText = `🟡 Nähe Hafen ${harbor.name} (${distance.toFixed(0)}m) - Stillstand ${stillstandCounter}/${STILLSTAND_THRESHOLD}`;
-            statusClass = 'tracking';
-            isAnker = false;
-          }
-        } else if (moving) {
-          statusText = '🚤 TRACK AKTIV - In Bewegung';
+        // Prüfe ob alle Positionen im FIFO gleich sind
+        const allSame = positionFIFO.length >= CONFIG.FIFO_SIZE &&
+                        positionFIFO.every(p => 
+                          isSamePosition(p, positionFIFO[0])
+                        );
+        
+        if (distance <= CONFIG.HARBOR_RADIUS && allSame) {
+          // Im Hafen: Abstand ≤200m UND FIFO voll mit gleicher Position
+          statusText = `⚓ Im Hafen ${harbor.name}`;
+          statusClass = 'harbor';
+          isAnker = true;
+        } else if (distance <= CONFIG.HARBOR_RADIUS) {
+          // In Hafen-Nähe
+          statusText = `🟡 Nähe Hafen ${harbor.name} (${distance.toFixed(0)}m) - FIFO: ${positionFIFO.length}/${CONFIG.FIFO_SIZE}`;
           statusClass = 'tracking';
           isAnker = false;
-          stillstandCounter = 0;
-          lastStillstandPosition = null;
-        } else {
-          statusText = '🟢 IM Polygon - Track bereit';
+        } else if (positionFIFO.length >= CONFIG.FIFO_SIZE && allSame) {
+          // Stillstand im Polygon (nicht in Hafen-Nähe)
+          statusText = `🟢 IM Polygon - Stillstand (FIFO: ${positionFIFO.length}/${CONFIG.FIFO_SIZE})`;
           statusClass = 'inside';
           isAnker = false;
-          stillstandCounter = 0;
-          lastStillstandPosition = null;
+        } else {
+          // In Bewegung oder Track bereit
+          statusText = isTracking ? '🚤 TRACK AKTIV - In Bewegung' : '🟢 IM Polygon - Track bereit';
+          statusClass = isTracking ? 'tracking' : 'inside';
+          isAnker = false;
         }
       }
       
@@ -438,10 +349,13 @@
       document.getElementById('status-text').textContent = statusText;
     }
 
-    // Mausbewegungs-Handler
+    // ============================================
+    // MAUSBEWEGUNGS-HANDLER
+    // ============================================
     map.on('mousemove', function(e) {
       const lat = e.latlng.lat;
       const lng = e.latlng.lng;
+      const currentTime = Date.now();
       
       // Koordinaten anzeigen
       document.getElementById('lat').textContent = lat.toFixed(6);
@@ -454,28 +368,29 @@
         boatMarker.setLatLng([lat, lng]);
       }
       
-      // Track-Linie aktualisieren
-      const currentTime = Date.now();
+      // Immer Position im FIFO speichern (für Stillstandserkennung)
+      const currentPos = { lat, lng, time: currentTime };
       
-      // Nur alle 500ms einen Punkt hinzufügen
-      if (currentTime - lastTime > 500 || !lastTime) {
-        trackPoints.push([lat, lng]);
-        trackLine.setLatLngs(trackPoints);
+      // FIFO aktualisieren (maximal CONFIG.FIFO_SIZE Punkte)
+      if (positionFIFO.length >= CONFIG.FIFO_SIZE) {
+        positionFIFO.shift(); // Ältesten Punkt entfernen
+      }
+      positionFIFO.push(currentPos);
+      
+      // Nur alle CONFIG.TRACK_INTERVAL ms einen Punkt zur Track-Linie hinzufügen
+      if (currentTime - lastTime > CONFIG.TRACK_INTERVAL || !lastTime) {
+        // Nur hinzufügen, wenn nicht Stillstand (alle Positionen im FIFO gleich)
+        const allSame = positionFIFO.length >= CONFIG.FIFO_SIZE &&
+                        positionFIFO.every(p => isSamePosition(p, positionFIFO[0]));
+        
+        if (!allSame) {
+          // Nur hinzufügen, wenn Bewegung erkannt wird
+          trackPoints.push([lat, lng]);
+          trackLine.setLatLngs(trackPoints);
+        }
+        
         lastPosition = { lat, lng };
         lastTime = currentTime;
-        
-        // Stillstandserkennung
-        if (!isMoving(lat, lng) && lastStillstandPosition) {
-          if (isSamePosition(lat, lng, lastStillstandPosition.lat, lastStillstandPosition.lng)) {
-            stillstandCounter++;
-          } else {
-            stillstandCounter = 1;
-            lastStillstandPosition = { lat, lng };
-          }
-        } else {
-          stillstandCounter = 0;
-          lastStillstandPosition = { lat, lng };
-        }
         
         // Status prüfen
         updateStatus(lat, lng);
@@ -487,6 +402,7 @@
           isTracking = false;
           trackPoints = [];
           trackLine.setLatLngs([]);
+          positionFIFO = [];
         }
       }
     });
@@ -500,8 +416,9 @@
       trackLine.setLatLngs([]);
       isTracking = false;
       isAnker = false;
-      stillstandCounter = 0;
-      lastStillstandPosition = null;
+      positionFIFO = [];
+      lastPosition = null;
+      lastTime = 0;
       updateStatus(e.latlng.lat, e.latlng.lng);
     });
   </script>
