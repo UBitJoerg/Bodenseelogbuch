@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Bodensee-Polygon (GPS Simulation mit Maus)</title>
+  <title>Bodensee-Polygon (GPS Simulation mit Maus + Ray-Casting)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -34,6 +34,18 @@
     .outside { background: #f8d7da; }
     .tracking { background: #fff3cd; }
     .anker { background: #e2e3e5; color: #383d41; }
+    #debug {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      background: rgba(255,255,255,0.8);
+      padding: 8px;
+      border-radius: 5px;
+      font-family: Arial, sans-serif;
+      font-size: 12px;
+      z-index: 1000;
+      max-width: 300px;
+    }
   </style>
 </head>
 <body>
@@ -46,6 +58,11 @@
   </div>
   <div id="status">
     <strong>Status:</strong> <span id="status-text">Warte auf Position...</span>
+  </div>
+  <div id="debug">
+    <strong>Debug:</strong><br>
+    Polygon-Check: <span id="polygon-check">-</span><br>
+    Schnittpunkte: <span id="intersections">-</span>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -63,16 +80,18 @@
       attribution: 'Seamarks: &copy; <a href="https://www.openseamap.org">OpenSeaMap</a>'
     }).addTo(map);
 
-    // Polygon (deine 6 Eckpunkte)
-    const polygon = L.polygon([
+    // Polygon-Punkte (deine 6 Eckpunkte)
+    const polyPoints = [
       [47.627, 8.8278],   // Neuhausen TG (CH)
       [47.646, 9.162],    // Kreuzlingen TG (CH)
       [47.474, 9.482],    // Rorschach SG (CH)
       [47.417, 9.7458],   // Dornbirn (AT)
       [47.562, 9.8175],   // Möggers (AT)
-      [47.850, 9.0167],   // Stockach (DE)
-      [47.627, 8.8278]    // Rückschluss
-    ], {
+      [47.850, 9.0167]    // Stockach (DE)
+    ];
+
+    // Polygon zeichnen
+    const polygon = L.polygon([...polyPoints, polyPoints[0]], {
       color: 'red',
       weight: 3,
       opacity: 0.7,
@@ -95,14 +114,42 @@
       iconAnchor: [16, 16]
     });
 
-    // Funktion: Prüfe ob Punkt im Polygon liegt
+    // ============================================
+    // RAY-CASTING ALGORITHMUS (präzise Polygon-Erkennung)
+    // ============================================
+    // Prüft, ob ein Punkt (lat, lng) IM Polygon liegt
+    // Methode: Zähle Schnittpunkte einer horizontalen Linie nach Norden
+    // Ungerade Anzahl = drinnen, gerade = draußen
     function isInsidePolygon(lat, lng) {
-      return polygon.getBounds().contains([lat, lng]);
+      let intersections = 0;
+      
+      for (let i = 0, j = polyPoints.length - 1; i < polyPoints.length; j = i++) {
+        const xi = polyPoints[i][1], yi = polyPoints[i][0];  // lng, lat
+        const xj = polyPoints[j][1], yj = polyPoints[j][0];  // lng, lat
+
+        // Prüfe, ob die horizontale Linie bei y=lat die Kante (i,j) schneidet
+        // 1. Kante muss die horizontale Linie überqueren (eine Ecke über, eine unter)
+        const crossesHorizontal = (yi > lat) !== (yj > lat);
+        
+        // 2. Berechne x-Koordinate des Schnittpunkts
+        //    Formel: x = xi + (lat - yi) * (xj - xi) / (yj - yi)
+        const xIntersect = xi + (lat - yi) * (xj - xi) / (yj - yi);
+        
+        // 3. Schnittpunkt muss rechts vom Testpunkt liegen (lng < xIntersect)
+        if (crossesHorizontal && lng < xIntersect) {
+          intersections++;
+        }
+      }
+      
+      // Ungerade Anzahl Schnittpunkte = Punkt ist drinnen
+      return intersections % 2 === 1;
     }
 
-    // Funktion: Berechne Abstand zwischen zwei Punkten in Metern
+    // ============================================
+    // HILFSFUNKTIONEN
+    // ============================================
     function getDistance(lat1, lng1, lat2, lng2) {
-      const R = 6371000; // Erdradius in Metern
+      const R = 6371000;
       const dLat = (lat2 - lat1) * Math.PI / 180;
       const dLng = (lng2 - lng1) * Math.PI / 180;
       const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
@@ -112,27 +159,33 @@
       return R * c;
     }
 
-    // Funktion: Prüfe ob sich das Boot bewegt
     function isMoving(currentLat, currentLng) {
       if (!lastPosition) return false;
-      
       const distance = getDistance(
         lastPosition.lat, lastPosition.lng,
         currentLat, currentLng
       );
-      
       const currentTime = Date.now();
       const timeDiff = currentTime - lastTime;
-      
-      // Bewegung: > 5m in den letzten 100ms (ca. 0.18 km/h)
-      const speed = distance / (timeDiff / 1000); // m/s
-      return speed > 0.1; // ~0.36 km/h (sehr langsame Bewegung)
+      const speed = distance / (timeDiff / 1000);
+      return speed > 0.1;
     }
 
-    // Funktion: Status aktualisieren
     function updateStatus(lat, lng) {
       const inside = isInsidePolygon(lat, lng);
       const moving = isMoving(lat, lng);
+      
+      // Debug: Anzahl Schnittpunkte anzeigen
+      let intersections = 0;
+      for (let i = 0, j = polyPoints.length - 1; i < polyPoints.length; j = i++) {
+        const xi = polyPoints[i][1], yi = polyPoints[i][0];
+        const xj = polyPoints[j][1], yj = polyPoints[j][0];
+        const crossesHorizontal = (yi > lat) !== (yj > lat);
+        const xIntersect = xi + (lat - yi) * (xj - xi) / (yj - yi);
+        if (crossesHorizontal && lng < xIntersect) intersections++;
+      }
+      document.getElementById('intersections').textContent = intersections;
+      document.getElementById('polygon-check').textContent = inside ? 'DRINNEN' : 'DRAUSSEN';
       
       let statusText = '';
       let statusClass = '';
@@ -164,35 +217,26 @@
       const lat = e.latlng.lat;
       const lng = e.latlng.lng;
       
-      // Koordinaten anzeigen
       document.getElementById('lat').textContent = lat.toFixed(6);
       document.getElementById('lng').textContent = lng.toFixed(6);
       
-      // Boot-Marker aktualisieren
       if (!boatMarker) {
         boatMarker = L.marker([lat, lng], { icon: boatIcon, zIndexOffset: 1000 }).addTo(map);
       } else {
         boatMarker.setLatLng([lat, lng]);
       }
       
-      // Track-Linie aktualisieren
       const currentTime = Date.now();
-      
-      // Nur alle 500ms einen Punkt hinzufügen (für glattere Linie)
       if (currentTime - lastTime > 500 || !lastTime) {
         trackPoints.push([lat, lng]);
         trackLine.setLatLngs(trackPoints);
         lastPosition = { lat, lng };
         lastTime = currentTime;
         
-        // Status prüfen
         updateStatus(lat, lng);
         
-        // Track-Logik: Nur wenn im Polygon
         if (isInsidePolygon(lat, lng)) {
-          if (!isTracking) {
-            isTracking = true;
-          }
+          if (!isTracking) isTracking = true;
         } else {
           isTracking = false;
           trackPoints = [];
@@ -204,7 +248,7 @@
     // Karte auf Polygon zoomen
     map.fitBounds(polygon.getBounds());
 
-    // Info: Track zurücksetzen bei Klick
+    // Track zurücksetzen bei Klick
     map.on('click', function(e) {
       trackPoints = [];
       trackLine.setLatLngs([]);
